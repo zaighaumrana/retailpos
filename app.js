@@ -1,251 +1,153 @@
-// =========================
-// SIMPLE MOCK DATABASE
-// =========================
+// ===== SIMPLE DEMO POS SYSTEM =====
 
-let products = JSON.parse(localStorage.getItem("products")) || [];
-let cart = [];
-let tickets = JSON.parse(localStorage.getItem("tickets")) || [];
-let settings = JSON.parse(localStorage.getItem("settings")) || {
-  shopName: "RetailPOS"
+const state = {
+  products: [
+    { id: "1", name: "iPhone Screen", price: 120, stock: 5 },
+    { id: "2", name: "Battery Pack", price: 35, stock: 12 },
+    { id: "3", name: "Charging Port", price: 18, stock: 8 }
+  ],
+  cart: [],
+  repairTickets: [],
+  employeePin: "1234",
+  authenticated: false
 };
 
-let adminLoggedIn = false;
-
-// apply settings
-document.getElementById("shopName").innerText = settings.shopName;
-
-// =========================
-// PAGE SWITCHER
-// =========================
-function showPage(page) {
-  document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
-  document.getElementById(page).classList.add("active");
-
-  if (page === "pos") loadPOS();
-  if (page === "inventory") loadInventory();
-  if (page === "repairs") loadTickets();
-}
-
-// =========================
-// INVENTORY
-// =========================
-function addProduct() {
-  let name = document.getElementById("pname").value;
-  let price = document.getElementById("pprice").value;
-  let qty = document.getElementById("pqty").value;
-  let imgInput = document.getElementById("pimg");
-
-  let img = "";
-
-  if (imgInput.files && imgInput.files[0]) {
-    let reader = new FileReader();
-    reader.onload = function (e) {
-      img = e.target.result;
-
-      saveProduct(name, price, qty, img);
-    };
-    reader.readAsDataURL(imgInput.files[0]);
-  } else {
-    saveProduct(name, price, qty, img);
-  }
-}
-
-function saveProduct(name, price, qty, img) {
-  let product = {
-    id: Date.now(),
-    name,
-    price: Number(price),
-    qty: Number(qty),
-    img
-  };
-
-  products.push(product);
-  localStorage.setItem("products", JSON.stringify(products));
-
-  document.getElementById("pname").value = "";
-  document.getElementById("pprice").value = "";
-  document.getElementById("pqty").value = "";
-  document.getElementById("pimg").value = "";
-
-  loadInventory();
-}
-
-// render inventory
-function loadInventory() {
-  let list = document.getElementById("productList");
-  list.innerHTML = "";
-
-  products.forEach(p => {
-    list.innerHTML += `
-      <div class="item">
-        <b>${p.name}</b><br>
-        Price: Rs ${p.price}<br>
-        Stock: ${p.qty}
-      </div>
-    `;
-  });
-}
-
-// =========================
-// POS SYSTEM
-// =========================
-function loadPOS() {
-  let box = document.getElementById("posProducts");
-  box.innerHTML = "";
-
-  products.forEach(p => {
-    box.innerHTML += `
-      <div class="product" onclick="addToCart(${p.id})">
-        <b>${p.name}</b><br>
-        Rs ${p.price}
-      </div>
-    `;
-  });
-
-  renderCart();
-}
-
+// ---------- CART ----------
 function addToCart(id) {
-  let product = products.find(p => p.id === id);
+  const p = state.products.find(x => x.id === id);
+  const item = state.cart.find(x => x.id === id);
 
-  cart.push({
-    id: product.id,
-    name: product.name,
-    price: product.price
-  });
+  if (item) item.qty++;
+  else state.cart.push({ ...p, qty: 1, discount: 0 });
 
-  renderCart();
+  render();
 }
 
-function renderCart() {
-  let box = document.getElementById("cart");
-  let totalBox = document.getElementById("total");
+function updatePrice(id, newPrice, reason) {
+  const item = state.cart.find(x => x.id === id);
+  if (!item) return;
 
-  box.innerHTML = "";
-  let total = 0;
+  item.price = newPrice;
+  item.discountReason = reason;
+  render();
+}
 
-  cart.forEach((item, i) => {
-    total += item.price;
+// ---------- REPAIR TICKET ----------
+function createRepairTicket(data) {
+  const ticket = {
+    id: "TKT-" + Date.now(),
+    ...data
+  };
 
-    box.innerHTML += `
-      <div>
-        ${item.name} - Rs ${item.price}
-        <button onclick="removeItem(${i})">X</button>
+  state.repairTickets.push(ticket);
+
+  // optional: add as cart service item
+  state.cart.push({
+    id: ticket.id,
+    name: `Repair: ${data.device}`,
+    price: 0,
+    qty: 1
+  });
+
+  render();
+}
+
+// ---------- CHECKOUT ----------
+function checkout(pin) {
+  if (pin !== state.employeePin) {
+    alert("Invalid PIN");
+    return;
+  }
+
+  const invoice = {
+    items: state.cart,
+    total: state.cart.reduce((s, i) => s + i.price * i.qty, 0),
+    date: new Date().toISOString()
+  };
+
+  // save locally (demo backend)
+  const sales = JSON.parse(localStorage.getItem("sales") || "[]");
+  sales.push(invoice);
+  localStorage.setItem("sales", JSON.stringify(sales));
+
+  printReceipt(invoice);
+  state.cart = [];
+  render();
+}
+
+// ---------- THERMAL PRINT ----------
+function printReceipt(inv) {
+  const html = `
+  <div style="width:300px;font-family:monospace">
+    <h3>RetailPOS Demo</h3>
+    -------------------------
+    ${inv.items.map(i => `
+      ${i.name}<br>
+      ${i.qty} x ${i.price}<br>
+    `).join("")}
+    -------------------------
+    TOTAL: ${inv.total}
+  </div>`;
+
+  const w = window.open("");
+  w.document.write(html);
+  w.print();
+  w.close();
+}
+
+// ---------- RENDER ----------
+function render() {
+  document.body.innerHTML = `
+    <div style="display:flex">
+
+      <!-- PRODUCTS -->
+      <div style="width:60%">
+        <h2>Products</h2>
+        ${state.products.map(p => `
+          <div onclick="addToCart('${p.id}')"
+               style="border:1px solid #ccc;margin:5px;padding:10px">
+            ${p.name} - $${p.price}
+          </div>
+        `).join("")}
       </div>
-    `;
-  });
 
-  totalBox.innerText = total;
-}
+      <!-- CART -->
+      <div style="width:40%">
+        <h2>Cart</h2>
 
-function removeItem(i) {
-  cart.splice(i, 1);
-  renderCart();
-}
+        ${state.cart.map(i => `
+          <div>
+            ${i.name} | $${i.price}
+            <button onclick="updatePrice('${i.id}', prompt('New price'), 'override')">
+              Discount
+            </button>
+          </div>
+        `).join("")}
 
-// checkout
-function checkout() {
-  if (cart.length === 0) return alert("Cart empty");
+        <hr/>
+        <button onclick="checkout(prompt('Enter PIN'))">
+          Checkout & Print
+        </button>
 
-  let invoice = {
-    id: Date.now(),
-    items: cart,
-    total: cart.reduce((sum, i) => sum + i.price, 0),
-    date: new Date().toLocaleString()
-  };
-
-  alert("Sale Completed! Invoice #" + invoice.id);
-
-  cart = [];
-  renderCart();
-}
-
-// =========================
-// REPAIR TICKETS
-// =========================
-function addTicket() {
-  let name = document.getElementById("cname").value;
-  let device = document.getElementById("device").value;
-  let issue = document.getElementById("issue").value;
-
-  let ticket = {
-    id: "R-" + Math.floor(1000 + Math.random() * 9000),
-    name,
-    device,
-    issue,
-    status: "Received"
-  };
-
-  tickets.push(ticket);
-  localStorage.setItem("tickets", JSON.stringify(tickets));
-
-  document.getElementById("cname").value = "";
-  document.getElementById("device").value = "";
-  document.getElementById("issue").value = "";
-
-  loadTickets();
-}
-
-function loadTickets() {
-  let box = document.getElementById("ticketList");
-  box.innerHTML = "";
-
-  tickets.forEach(t => {
-    box.innerHTML += `
-      <div class="ticket">
-        <b>${t.id}</b><br>
-        ${t.name} - ${t.device}<br>
-        Issue: ${t.issue}<br>
-        Status: ${t.status}<br>
-
-        <button onclick="addTicketToCart('${t.id}')">
-          Add to POS
+        <button onclick="showRepair()">
+          New Repair Ticket
         </button>
       </div>
-    `;
+    </div>
+  `;
+}
+
+// ---------- REPAIR UI ----------
+function showRepair() {
+  const device = prompt("Device");
+  const issue = prompt("Issue");
+
+  createRepairTicket({
+    device,
+    issue,
+    customer: prompt("Customer Name")
   });
-}
-
-// add repair to cart
-function addTicketToCart(id) {
-  let ticket = tickets.find(t => t.id === id);
-
-  cart.push({
-    id: ticket.id,
-    name: "Repair: " + ticket.device,
-    price: 5000 // demo fixed repair price
-  });
-
-  alert("Repair added to cart");
-  showPage("pos");
-}
-
-// =========================
-// ADMIN
-// =========================
-function loginAdmin() {
-  let pass = document.getElementById("adminPass").value;
-
-  if (pass === "1234") {
-    adminLoggedIn = true;
-    document.getElementById("adminPanel").style.display = "block";
-    alert("Admin logged in");
-  } else {
-    alert("Wrong PIN");
-  }
-}
-
-function saveSettings() {
-  let name = document.getElementById("shopInput").value;
-
-  settings.shopName = name;
-  localStorage.setItem("settings", JSON.stringify(settings));
-
-  document.getElementById("shopName").innerText = name;
-
-  alert("Settings saved");
 }
 
 // init
-loadInventory();
-loadTickets();
+render();
