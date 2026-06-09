@@ -1,153 +1,120 @@
-// ===== SIMPLE DEMO POS SYSTEM =====
-
+// ======================
+// STATE
+// ======================
 const state = {
-  products: [
-    { id: "1", name: "iPhone Screen", price: 120, stock: 5 },
-    { id: "2", name: "Battery Pack", price: 35, stock: 12 },
-    { id: "3", name: "Charging Port", price: 18, stock: 8 }
-  ],
+  view: "pos",
+  pin: "1234",
   cart: [],
-  repairTickets: [],
-  employeePin: "1234",
-  authenticated: false
+  products: [
+    { id: "1", name: "iPhone Screen", price: 120 },
+    { id: "2", name: "Battery Pack", price: 35 },
+    { id: "3", name: "Charging Port", price: 18 }
+  ]
 };
 
-// ---------- CART ----------
+// ======================
+// NAVIGATION
+// ======================
+function openAdmin() {
+  const pin = prompt("Admin PIN");
+  if (pin !== state.pin) return alert("Wrong PIN");
+  state.view = "admin";
+  render();
+}
+
+function backToPOS() {
+  state.view = "pos";
+  render();
+}
+
+// ======================
+// CART
+// ======================
 function addToCart(id) {
   const p = state.products.find(x => x.id === id);
   const item = state.cart.find(x => x.id === id);
 
   if (item) item.qty++;
-  else state.cart.push({ ...p, qty: 1, discount: 0 });
+  else state.cart.push({ ...p, qty: 1 });
 
   render();
 }
 
-function updatePrice(id, newPrice, reason) {
-  const item = state.cart.find(x => x.id === id);
-  if (!item) return;
+function checkout() {
+  const total = state.cart.reduce((s, i) => s + i.price * i.qty, 0);
 
-  item.price = newPrice;
-  item.discountReason = reason;
-  render();
-}
+  const receipt = `
+RETAIL POS
+------------------
+${state.cart.map(i => `${i.name} x${i.qty} = ${i.price * i.qty}`).join("\n")}
+------------------
+TOTAL: ${total}
+`;
 
-// ---------- REPAIR TICKET ----------
-function createRepairTicket(data) {
-  const ticket = {
-    id: "TKT-" + Date.now(),
-    ...data
-  };
+  const w = window.open("");
+  w.document.write(`<pre>${receipt}</pre>`);
+  w.print();
+  w.close();
 
-  state.repairTickets.push(ticket);
-
-  // optional: add as cart service item
-  state.cart.push({
-    id: ticket.id,
-    name: `Repair: ${data.device}`,
-    price: 0,
-    qty: 1
-  });
-
-  render();
-}
-
-// ---------- CHECKOUT ----------
-function checkout(pin) {
-  if (pin !== state.employeePin) {
-    alert("Invalid PIN");
-    return;
-  }
-
-  const invoice = {
-    items: state.cart,
-    total: state.cart.reduce((s, i) => s + i.price * i.qty, 0),
-    date: new Date().toISOString()
-  };
-
-  // save locally (demo backend)
-  const sales = JSON.parse(localStorage.getItem("sales") || "[]");
-  sales.push(invoice);
-  localStorage.setItem("sales", JSON.stringify(sales));
-
-  printReceipt(invoice);
   state.cart = [];
   render();
 }
 
-// ---------- THERMAL PRINT ----------
-function printReceipt(inv) {
-  const html = `
-  <div style="width:300px;font-family:monospace">
-    <h3>RetailPOS Demo</h3>
-    -------------------------
-    ${inv.items.map(i => `
-      ${i.name}<br>
-      ${i.qty} x ${i.price}<br>
-    `).join("")}
-    -------------------------
-    TOTAL: ${inv.total}
-  </div>`;
+// ======================
+// POS VIEW (IMPORTANT)
+// ======================
+function renderPOS() {
+  const productsHTML = state.products.map(p => `
+    <div onclick="addToCart('${p.id}')"
+      style="padding:10px;margin:5px;border:1px solid #ddd;cursor:pointer">
+      ${p.name} - $${p.price}
+    </div>
+  `).join("");
 
-  const w = window.open("");
-  w.document.write(html);
-  w.print();
-  w.close();
-}
+  const cartHTML = state.cart.map(i => `
+    <div>${i.name} x${i.qty}</div>
+  `).join("");
 
-// ---------- RENDER ----------
-function render() {
-  document.body.innerHTML = `
-    <div style="display:flex">
+  document.getElementById("app").innerHTML = `
+    <div style="display:flex;height:100vh">
 
       <!-- PRODUCTS -->
-      <div style="width:60%">
+      <div style="flex:2;padding:10px">
         <h2>Products</h2>
-        ${state.products.map(p => `
-          <div onclick="addToCart('${p.id}')"
-               style="border:1px solid #ccc;margin:5px;padding:10px">
-            ${p.name} - $${p.price}
-          </div>
-        `).join("")}
+        ${productsHTML}
       </div>
 
       <!-- CART -->
-      <div style="width:40%">
+      <div style="flex:1;padding:10px;border-left:1px solid #ddd">
         <h2>Cart</h2>
-
-        ${state.cart.map(i => `
-          <div>
-            ${i.name} | $${i.price}
-            <button onclick="updatePrice('${i.id}', prompt('New price'), 'override')">
-              Discount
-            </button>
-          </div>
-        `).join("")}
-
-        <hr/>
-        <button onclick="checkout(prompt('Enter PIN'))">
-          Checkout & Print
-        </button>
-
-        <button onclick="showRepair()">
-          New Repair Ticket
-        </button>
+        ${cartHTML}
+        <hr>
+        <button onclick="checkout()">Checkout & Print</button>
       </div>
+
     </div>
   `;
 }
 
-// ---------- REPAIR UI ----------
-function showRepair() {
-  const device = prompt("Device");
-  const issue = prompt("Issue");
-
-  createRepairTicket({
-    device,
-    issue,
-    customer: prompt("Customer Name")
-  });
+// ======================
+// ADMIN VIEW (placeholder)
+// ======================
+function renderAdmin() {
+  document.getElementById("app").innerHTML = `
+    <div style="padding:20px">
+      <h1>Admin Panel</h1>
+      <button onclick="backToPOS()">Back to POS</button>
+      <p>Inventory, Employees, Settings go here</p>
+    </div>
+  `;
 }
 
-// init
+// ======================
+// RENDER ENGINE
+// ======================
+function render() {
+  if (state.view === "pos") renderPOS();
+  else renderAdmin();
+}
+
 render();
