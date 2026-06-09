@@ -1,111 +1,32 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>RetailPOS Demo</title>
-  <link rel="stylesheet" href="style.css"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <style>
+    body { margin:0; font-family:sans-serif; }
+    .admin-btn {
+      position:fixed;
+      bottom:20px;
+      right:20px;
+      padding:10px 14px;
+      border:none;
+      background:#111;
+      color:#fff;
+      border-radius:8px;
+      cursor:pointer;
+    }
+  </style>
 </head>
+
 <body>
 
-<div class="app">
+  <div id="app"></div>
 
-  <!-- SIDEBAR -->
-  <div class="sidebar">
-    <h2 id="shopName">RetailPOS</h2>
+  <!-- hidden admin entry -->
+  <button class="admin-btn" onclick="openAdmin()">Admin</button>
 
-    <button onclick="showPage('dashboard')">Dashboard</button>
-    <button onclick="showPage('inventory')">Inventory</button>
-    <button onclick="showPage('pos')">POS</button>
-    <button onclick="showPage('repairs')">Repairs</button>
-    <button onclick="showPage('admin')">Admin</button>
-  </div>
-
-  <!-- MAIN -->
-  <div class="main">
-
-    <!-- DASHBOARD -->
-    <div id="dashboard" class="page active">
-      <h1>Dashboard</h1>
-
-      <div class="cards">
-        <div class="card">Today Sales<br><b>Rs 12,000</b></div>
-        <div class="card">Pending Repairs<br><b>5</b></div>
-        <div class="card">Inventory Items<br><b>24</b></div>
-      </div>
-    </div>
-
-    <!-- INVENTORY -->
-    <div id="inventory" class="page">
-      <h1>Inventory</h1>
-
-      <div class="form">
-        <input id="pname" placeholder="Product Name">
-        <input id="pprice" placeholder="Price">
-        <input id="pqty" placeholder="Qty">
-
-        <input type="file" accept="image/*" capture="environment" id="pimg">
-
-        <button onclick="addProduct()">Add Product</button>
-      </div>
-
-      <div id="productList"></div>
-    </div>
-
-    <!-- POS -->
-    <div id="pos" class="page">
-      <h1>POS</h1>
-
-      <div class="pos">
-
-        <div class="products" id="posProducts"></div>
-
-        <div class="cart">
-          <h3>Cart</h3>
-          <div id="cart"></div>
-
-          <hr>
-          <h2>Total: Rs <span id="total">0</span></h2>
-
-          <button onclick="checkout()">Checkout</button>
-        </div>
-
-      </div>
-    </div>
-
-    <!-- REPAIRS -->
-    <div id="repairs" class="page">
-      <h1>Repair Tickets</h1>
-
-      <div class="form">
-        <input id="cname" placeholder="Customer Name">
-        <input id="device" placeholder="Device">
-        <input id="issue" placeholder="Issue">
-        <button onclick="addTicket()">Create Ticket</button>
-      </div>
-
-      <div id="ticketList"></div>
-    </div>
-
-    <!-- ADMIN -->
-    <div id="admin" class="page">
-      <h1>Admin Panel</h1>
-
-      <input id="adminPass" type="password" placeholder="Enter Admin PIN">
-      <button onclick="loginAdmin()">Login</button>
-
-      <div id="adminPanel" style="display:none;">
-        <h3>Settings</h3>
-
-        <input id="shopInput" placeholder="Shop Name">
-        <button onclick="saveSettings()">Save</button>
-      </div>
-
-    </div>
-
-  </div>
-</div>
-
-<script src="app.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>
