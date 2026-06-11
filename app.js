@@ -1,176 +1,133 @@
 /* ═══════════════════════════════════════════════════════════════════
-   RetailOS  —  Shop App  (index.html)
-   Serves: POS counter staff + Business Admin back-office
-   Does NOT contain any platform-admin code.
+   RetailOS — Shop App
+   Backend: Supabase (replaces IndexedDB + Google Sheets)
 ═══════════════════════════════════════════════════════════════════ */
+import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
 
-const DB_NAME    = "retailos-demo";
-const DB_VERSION = 1;
-const STORES     = ["tenants","products","customers","employees","sales","repairs","movements","settings","syncQueue","conflicts"];
+const SUPABASE_URL  = "YOUR_SUPABASE_URL";   // e.g. https://xxxx.supabase.co
+const SUPABASE_ANON = "YOUR_SUPABASE_ANON_KEY";
+const sb            = createClient(SUPABASE_URL, SUPABASE_ANON);
 
-const money  = (v, sym = "$") => `${sym}${Number(v||0).toLocaleString(undefined,{maximumFractionDigits:2})}`;
-const today  = new Date("2026-06-09T10:30:00");
+const money  = (v, sym = "Rs.") => `${sym} ${Number(v||0).toLocaleString(undefined,{maximumFractionDigits:0})}`;
 const params = new URLSearchParams(location.search);
 
+// ── App state (no tenantId needed — single shop per Supabase project) ──
 const state = {
-  route:       params.get("route")  || "pos",   // "pos" | "admin"
-  adminModule: params.get("module") || "dashboard",
-  tenantId:    params.get("tenant") || "tenant-mobile",
-  role:        "Business Owner",
-  theme:       localStorage.getItem("retailos-theme") || "light",
-  online:      navigator.onLine,
-  syncing:     false,
-  filter:      "",
-  category:    "All",
-  cart:        [],
-  data:        {},
-  modal:       null,
-  installPrompt: null,
-  settingsTab: "branding",   // "branding" | "contact" | "receipt"
+  route:        params.get("route") || "pos",
+  adminModule:  "dashboard",
+  role:         "Business Owner",
+  theme:        localStorage.getItem("retailos-theme") || "light",
+  online:       navigator.onLine,
+  filter:       "",
+  category:     "All",
+  cart:         [],
+  data:         { tickets:[], sales:[], employees:[], udhar:[], returns:[], config:{} },
+  modal:        null,
+  installPrompt:null,
+  settingsTab:  "branding",
+  checkoutPayment: "Cash",
+  cartTicketId:    null,
+  udharName:       "",
+  udharPhone:      "",
 };
 
-/* ── Demo seed data ─────────────────────────────────────────────── */
-const demo = {
-  tenants: [
-    { id:"tenant-mobile",  name:"FixPoint Mobile Care",  industry:"Mobile Repair Shop", status:"Active",    plan:"Premium",  address:"42 Market Street, Lahore",     phone:"+92 300 555 0188", whatsapp:"+92 300 555 0188", email:"hello@fixpoint.demo",      receiptFooter:"Thank you for choosing FixPoint. Warranty applies to listed parts only.", primaryColor:"#126c5b", secondaryColor:"#e9b949", currency:"$", taxRate:8.5, logo:"", businessDescription:"Premium mobile repair, accessories, and device resale service.", repairModuleEnabled:true  },
-    { id:"tenant-fashion", name:"Urban Thread Co.",       industry:"Fashion Store",       status:"Active",    plan:"Standard", address:"9 Studio Avenue, Karachi",     phone:"+92 321 887 2200", whatsapp:"+92 321 887 2200", email:"sales@urbanthread.demo",  receiptFooter:"Exchange within 7 days with receipt.",                                   primaryColor:"#244c7a", secondaryColor:"#c88d47", currency:"$", taxRate:5,   logo:"", businessDescription:"Fashion retail and accessories showroom.",                    repairModuleEnabled:false },
-    { id:"tenant-grocery", name:"FreshBasket Retail",     industry:"Grocery Store",       status:"Suspended", plan:"Basic",    address:"18 Green Lane, Islamabad",     phone:"+92 333 111 4400", whatsapp:"+92 333 111 4400", email:"care@freshbasket.demo",   receiptFooter:"Fresh goods, fair prices.",                                              primaryColor:"#2f6f46", secondaryColor:"#d8a31a", currency:"$", taxRate:3,   logo:"", businessDescription:"Neighborhood grocery and daily essentials store.",            repairModuleEnabled:false },
-  ],
-  products: [
-    ["iPhone 14 Screen","SCR-IP14","Repair Parts","Apple",78,129,14,4],
-    ["Samsung A54 Battery","BAT-A54","Repair Parts","Samsung",22,45,28,8],
-    ["USB-C Fast Charger","CHG-45W","Accessories","Anker",12,25,44,12],
-    ["Tempered Glass Pack","GLS-MIX","Accessories","ClearPro",2.2,8,110,30],
-    ["Bluetooth Earbuds","AUD-BUDS","Electronics","Soundix",19,39,18,6],
-    ["Refurbished iPhone X","PHN-IPX","Phones","Apple",160,249,5,2],
-    ["Laptop SSD 512GB","SSD-512","Computer Parts","Kingston",31,59,21,5],
-    ["Phone Grip Stand","ACC-GRIP","Accessories","PopOne",1.6,7,67,15],
-  ],
-  customers: [
-    ["Ayesha Khan","+92 300 111 2233","ayesha@example.com","Gulberg, Lahore",420],
-    ["Hamza Malik","+92 321 444 8922","hamza@example.com","DHA Phase 5",250],
-    ["Sara Ahmed","+92 333 299 4477","sara@example.com","Johar Town",680],
-    ["Bilal Raza","+92 345 908 1200","bilal@example.com","Model Town",98],
-    ["Nadia Tariq","+92 307 201 5550","nadia@example.com","Cantt",310],
-  ],
-  employees: [
-    ["Mariam Siddiqui","+92 300 333 1000","mariam@fixpoint.demo","Business Owner","Active"],
-    ["Usman Qureshi","+92 301 222 4400","usman@fixpoint.demo","Manager","Active"],
-    ["Hina Baloch","+92 302 445 9012","hina@fixpoint.demo","Cashier","Active"],
-    ["Ali Imran","+92 303 991 1177","ali@fixpoint.demo","Technician","Active"],
-    ["Zain Noor","+92 304 660 3322","zain@fixpoint.demo","Inventory Staff","Disabled"],
-  ],
+// ── Session (employee logged in via PIN) ──
+let SESSION = { employee: null, loginSkipped: false };
+
+// ── Config cache (from shop_config table) ──
+let CFG = {
+  admin_password:       "1234",
+  strict_login_mode:    false,
+  discount_pin_required:true,
+  partial_udhar_allowed:true,
+  quick_components:     ["Screen","Battery","Body","Board","Camera","Mic","Speaker","Charging Port","Back Glass","SIM Tray","Power Button","Volume Button"],
+  terms_text:           "Warranty: 30 days on parts replaced.",
+  shop_name:            "FixPoint Mobile Care",
+  shop_address:         "42 Market Street, Lahore",
+  shop_phone:           "+92 300 555 0188",
+  primary_color:        "#126c5b",
+  secondary_color:      "#e9b949",
+  currency:             "Rs.",
+  tax_rate:             0,
 };
 
-/* ── IndexedDB repo ─────────────────────────────────────────────── */
-function openDb() {
-  return new Promise((res,rej) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      STORES.forEach(s => { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s,{keyPath:"id"}); });
-    };
-    req.onsuccess = () => res(req.result);
-    req.onerror  = () => rej(req.error);
-  });
-}
-const repo = {
-  async all(store) {
-    const db  = await openDb();
-    return new Promise((res,rej) => { const r = db.transaction(store,"readonly").objectStore(store).getAll(); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); });
-  },
-  async put(store, item, queue=false) {
-    const db = await openDb();
-    const stamped = { ...item, updatedAt: new Date().toISOString() };
-    await new Promise((res,rej) => { const tx=db.transaction(store,"readwrite"); tx.objectStore(store).put(stamped); tx.oncomplete=res; tx.onerror=()=>rej(tx.error); });
-    if (queue) await repo.queue({ entity:store, action:"upsert", recordId:stamped.id, payload:stamped });
-    return stamped;
-  },
-  async delete(store, id, queue=true) {
-    const db = await openDb();
-    await new Promise((res,rej) => { const tx=db.transaction(store,"readwrite"); tx.objectStore(store).delete(id); tx.oncomplete=res; tx.onerror=()=>rej(tx.error); });
-    if (queue) await repo.queue({ entity:store, action:"delete", recordId:id });
-  },
-  async queue(change) {
-    return repo.put("syncQueue",{ id:uid("sync"), status:"Pending Sync", createdAt:new Date().toISOString(), ...change },false);
-  },
-  async clear(store) {
-    const db = await openDb();
-    await new Promise((res,rej) => { const tx=db.transaction(store,"readwrite"); tx.objectStore(store).clear(); tx.oncomplete=res; tx.onerror=()=>rej(tx.error); });
-  },
-};
-
-function uid(p) { return `${p}-${Math.random().toString(36).slice(2,9)}-${Date.now().toString(36)}`; }
-
-/* ── Seed ───────────────────────────────────────────────────────── */
-function tenantRows(rows, factory) { return demo.tenants.flatMap((t,ti) => rows.map((r,i) => factory(r,t,ti,i))); }
-
-async function seed() {
-  const tenants = await repo.all("tenants");
-  if (tenants.length) return;
-  for (const t of demo.tenants) await repo.put("tenants", t);
-  const products = tenantRows(demo.products,(p,tenant,ti,i) => ({
-    id:`${tenant.id}-prod-${i}`, tenantId:tenant.id,
-    name: ti ? p[0].replace("iPhone","Premium").replace("Samsung","Everyday") : p[0],
-    sku:`${p[1]}-${ti+1}`, barcode:`9000${ti}${i}334`,
-    category: ti===1?["Apparel","Accessories","Footwear"][i%3]:ti===2?["Grocery","Household","Fresh"][i%3]:p[2],
-    brand:p[3], cost:p[4], price:p[5], qty:p[6], min:p[7], image:"",
-    description:"Demo catalog item.", notes:"Popular in recent transactions.",
-  }));
-  for (const p of products) await repo.put("products",p);
-  const customers = tenantRows(demo.customers,(c,tenant,ti,i) => ({ id:`${tenant.id}-cust-${i}`, tenantId:tenant.id, name:c[0], phone:c[1], email:c[2], address:c[3], notes:"Prefers WhatsApp updates.", loyalty:c[4]+ti*25 }));
-  for (const c of customers) await repo.put("customers",c);
-  const employees = tenantRows(demo.employees,(e,tenant,ti) => ({ id:`${tenant.id}-emp-${demo.employees.indexOf(e)}`, tenantId:tenant.id, name:e[0], phone:e[1], email:e[2].replace("fixpoint",tenant.name.toLowerCase().replaceAll(" ","").replaceAll(".","")), role:e[3], status:e[4] }));
-  for (const e of employees) await repo.put("employees",e);
-  const statuses = ["Received","Diagnosing","Waiting for Parts","In Progress","Ready for Pickup","Delivered","Cancelled"];
-  for (let i=0;i<16;i++) {
-    await repo.put("repairs",{ id:`repair-${i}`, tenantId:"tenant-mobile", ticket:`FP-${2400+i}`, customer:demo.customers[i%5][0], phone:demo.customers[i%5][1], brand:["Apple","Samsung","Xiaomi","Oppo"][i%4], model:["iPhone 13","Galaxy A54","Redmi Note 12","Reno 8"][i%4], imei:`3567${i}882233441`, serial:`SN${i}X${Date.now().toString().slice(-5)}`, issue:["No display","Battery swelling","Charging port loose","Speaker distortion"][i%4], notes:"Diagnostic recorded.", technician:["Ali Imran","Usman Qureshi"][i%2], parts:["Screen","Battery","Charging flex","Speaker"][i%4], labor:25+i*2, total:65+i*9, warranty:`${30+(i%3)*30} days`, eta:new Date(today.getTime()+(i%8)*86400000).toISOString().slice(0,10), status:statuses[i%statuses.length], createdBy:i%2?"Hina Baloch":"Ali Imran", createdAt:new Date(today.getTime()-(i%5)*86400000).toISOString(), timeline:["Received at counter","Diagnostic completed","Customer notified"].slice(0,1+(i%3)) });
+function uid(p) { return `${p}-${Math.random().toString(36).slice(2,7).toUpperCase()}`; }
+// ── Load config from Supabase ──────────────────────────────────────
+async function loadConfig() {
+  const { data, error } = await sb.from("shop_config").select("*").single();
+  if (error) { console.warn("Config load failed, using defaults.", error.message); return; }
+  // shop_config is a single row — merge into CFG
+  Object.assign(CFG, data);
+  // quick_components may be stored as JSONB array already parsed by Supabase
+  if (typeof CFG.quick_components === "string") {
+    try { CFG.quick_components = JSON.parse(CFG.quick_components); } catch {}
   }
-  const pmts = ["Cash","Card","Bank Transfer","Mixed Payment"];
-  const base = (await repo.all("products")).filter(p=>p.tenantId==="tenant-mobile");
-  for (let i=0;i<30;i++) {
-    const item = base[i%base.length];
-    const qty  = 1+(i%3);
-    const disc = i%5===0?8:0;
-    const sold = Math.max(1,item.price-disc);
-    await repo.put("sales",{ id:`sale-${i}`, tenantId:"tenant-mobile", receiptNo:`R-${1040+i}`, date:new Date(today.getTime()-i*86400000).toISOString(), cashier:"Hina Baloch", customer:demo.customers[i%5][0], items:[{productId:item.id,name:item.name,qty,originalPrice:item.price,soldPrice:sold,discount:disc,reason:disc?"Manager-approved demo discount":""}], subtotal:sold*qty, tax:sold*qty*0.085, total:sold*qty*1.085, profit:(sold-item.cost)*qty, payment:pmts[i%4], syncStatus:"Synced" });
-  }
-  await repo.put("settings",{id:"app",theme:state.theme,installedPromptDismissed:false});
+  applyBranding();
 }
 
-/* ── Sync ───────────────────────────────────────────────────────── */
-async function syncPending() {
-  if (!state.online||state.syncing) return;
-  const queue = await repo.all("syncQueue");
-  if (!queue.length) return;
-  state.syncing = true; render();
-  await new Promise(res=>setTimeout(res,900));
-  for (const c of queue) await repo.delete("syncQueue",c.id,false);
-  if (Math.random()>0.82) await repo.put("conflicts",{id:uid("conflict"),tenantId:state.tenantId,message:"Remote inventory timestamp differed from local stock adjustment.",createdAt:new Date().toISOString()});
-  state.syncing = false;
-  await load();
-}
-
-/* ── Data helpers ───────────────────────────────────────────────── */
+// ── Load all operational data ──────────────────────────────────────
 async function load() {
-  const [tenants,products,customers,employees,sales,repairs,queue,conflicts] = await Promise.all([repo.all("tenants"),repo.all("products"),repo.all("customers"),repo.all("employees"),repo.all("sales"),repo.all("repairs"),repo.all("syncQueue"),repo.all("conflicts")]);
-  state.data = { tenants,products,customers,employees,sales,repairs,queue,conflicts };
-  applyBranding(currentTenant());
+  await loadConfig();
+  const [tickets, sales, employees, udhar, returns_] = await Promise.all([
+    sb.from("tickets").select("*").order("id", { ascending: false }),
+    sb.from("sales").select("*").order("id", { ascending: false }),
+    sb.from("employees").select("id, name, role, status").order("name"), // never fetch pin_code on load
+    sb.from("udhar").select("*").order("id", { ascending: false }),
+    sb.from("returns").select("*").order("id", { ascending: false }),
+  ]);
+  state.data = {
+    tickets:   tickets.data   || [],
+    sales:     sales.data     || [],
+    employees: employees.data || [],
+    udhar:     udhar.data     || [],
+    returns:   returns_.data  || [],
+    config:    CFG,
+  };
+  applyBranding();
   render();
-  syncPending();
 }
 
-function currentTenant() {
-  return { businessDescription:"Retail business workspace.", repairModuleEnabled:true, ...(state.data.tenants?.find(t=>t.id===state.tenantId)||demo.tenants[0]) };
-}
-function scoped(store) { return (state.data[store]||[]).filter(i=>i.tenantId===state.tenantId); }
-function applyBranding(t) {
+// ── Branding from CFG (no tenant object needed) ────────────────────
+function applyBranding() {
   document.documentElement.dataset.theme = state.theme;
-  document.documentElement.style.setProperty("--primary",  t.primaryColor  ||"#126c5b");
-  document.documentElement.style.setProperty("--secondary",t.secondaryColor||"#e9b949");
-  document.querySelector('meta[name="theme-color"]')?.setAttribute("content",t.primaryColor||"#126c5b");
+  document.documentElement.style.setProperty("--primary",   CFG.primary_color   || "#126c5b");
+  document.documentElement.style.setProperty("--secondary", CFG.secondary_color || "#e9b949");
+  document.querySelector('meta[name="theme-color"]')
+    ?.setAttribute("content", CFG.primary_color || "#126c5b");
 }
 
+// ── currentTenant shim (keep UI functions working unchanged) ───────
+function currentTenant() {
+  return {
+    name:                CFG.shop_name        || "My Shop",
+    address:             CFG.shop_address     || "",
+    phone:               CFG.shop_phone       || "",
+    whatsapp:            CFG.shop_phone       || "",
+    primaryColor:        CFG.primary_color    || "#126c5b",
+    secondaryColor:      CFG.secondary_color  || "#e9b949",
+    currency:            CFG.currency         || "Rs.",
+    taxRate:             Number(CFG.tax_rate  || 0),
+    receiptFooter:       CFG.terms_text       || "",
+    repairModuleEnabled: true,
+    logo:                CFG.shop_logo        || "",
+    businessDescription: CFG.shop_description || "",
+    plan:                "Premium",
+    status:              "Active",
+  };
+}
+
+// ── scoped() shim — no tenantId filtering needed anymore ──────────
+function scoped(store) {
+  // map old store names to new state.data keys
+  const map = { repairs:"tickets", products:[], customers:[] };
+  if (store === "repairs")   return state.data.tickets   || [];
+  if (store === "sales")     return state.data.sales     || [];
+  if (store === "employees") return state.data.employees || [];
+  if (store === "udhar")     return state.data.udhar     || [];
+  if (store === "returns")   return state.data.returns   || [];
+  // products/customers not in Supabase for this build — return empty
+  return [];
+}
 /* ── Role-based access ──────────────────────────────────────────── */
 const ACCESS = {
   "Business Owner": ["dashboard","inventory","purchases","customers","pos","repairs","reports","employees","subscriptions","settings"],
