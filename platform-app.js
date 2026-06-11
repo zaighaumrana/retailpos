@@ -6,8 +6,8 @@
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
 
 // YOUR platform Supabase project — not the client's
-const PLATFORM_URL  = "YOUR_PLATFORM_SUPABASE_URL";
-const PLATFORM_ANON = "YOUR_PLATFORM_SUPABASE_ANON_KEY";
+const PLATFORM_URL  = "https://ukbhyerxshteyetwomqy.supabase.co";
+const PLATFORM_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVrYmh5ZXJ4c2h0ZXlldHdvbXF5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExOTc2NTUsImV4cCI6MjA5Njc3MzY1NX0.ioAMUo2YZcfhvHGeZOVa5UYMTSZiEMXj9HISrWCa-Do";
 const pb            = createClient(PLATFORM_URL, PLATFORM_ANON);
 
 /* ── State ─────────────────────────────────────────────────────── */
