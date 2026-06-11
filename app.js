@@ -69,19 +69,25 @@ async function loadConfig() {
 // ── Load all operational data ──────────────────────────────────────
 async function load() {
   await loadConfig();
-  const [tickets, sales, employees, udhar, returns_] = await Promise.all([
+  const fetchInventory = CFG.inventory_module_enabled
+    ? sb.from("inventory").select("*").order("name")
+    : Promise.resolve({ data: [] });
+
+  const [tickets, sales, employees, udhar, returns_, inventory_] = await Promise.all([
     sb.from("tickets").select("*").order("id", { ascending: false }),
     sb.from("sales").select("*").order("id", { ascending: false }),
-    sb.from("employees").select("id, name, role, status").order("name"), // never fetch pin_code on load
+    sb.from("employees").select("id, name, role, status").order("name"),
     sb.from("udhar").select("*").order("id", { ascending: false }),
     sb.from("returns").select("*").order("id", { ascending: false }),
+    fetchInventory,
   ]);
   state.data = {
-    tickets:   tickets.data   || [],
-    sales:     sales.data     || [],
-    employees: employees.data || [],
-    udhar:     udhar.data     || [],
-    returns:   returns_.data  || [],
+    tickets:   tickets.data    || [],
+    sales:     sales.data      || [],
+    employees: employees.data  || [],
+    udhar:     udhar.data      || [],
+    returns:   returns_.data   || [],
+    inventory: inventory_.data || [],
     config:    CFG,
   };
   applyBranding();
@@ -132,24 +138,25 @@ function scoped(store) {
 
 /* ── Role-based access ──────────────────────────────────────────── */
 const ACCESS = {
-  "Business Owner": ["dashboard","inventory","purchases","customers","pos","repairs","reports","employees","subscriptions","settings"],
-  "Manager":        ["dashboard","inventory","purchases","customers","pos","repairs","reports"],
-  "Cashier":        ["pos","customers"],
-  "Technician":     ["repairs","customers"],
-  "Inventory Staff":["inventory","purchases"],
+  "Business Owner": ["dashboard","repairs","inventory","reports","employees","settings","pos"],
+  "Manager":        ["dashboard","repairs","inventory","reports","pos"],
+  "Cashier":        ["pos"],
+  "Technician":     ["repairs","pos"],
 };
-function can(mod) { return ACCESS[state.role]?.includes(mod); }
+function can(mod) {
+  // Also gate by module toggles from CFG
+  if (mod === "repairs"   && !CFG.repair_module_enabled)    return false;
+  if (mod === "inventory" && !CFG.inventory_module_enabled) return false;
+  return ACCESS[state.role]?.includes(mod) ?? false;
+}
 
 const ADMIN_MODULES = [
-  ["dashboard","▦","Dashboard"],
-  ["inventory","▤","Inventory"],
-  ["purchases","↧","Purchases"],
-  ["customers","◉","Customers"],
-  ["repairs","◈","Repair Tickets"],
-  ["reports","▧","Reports"],
-  ["employees","♙","Employees"],
-  ["subscriptions","◎","Subscription"],
-  ["settings","◐","Business Settings"],
+  ["dashboard", "▦", "Dashboard"],
+  ["repairs",   "◈", "Repair Tickets"],
+  ["inventory", "▤", "Inventory"],
+  ["reports",   "▧", "Reports"],
+  ["employees", "♙", "Employees"],
+  ["settings",  "◐", "Settings"],
 ];
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -605,10 +612,17 @@ function render() {
 }
 
 function pageContent() {
-  if (state.route==="pos") return pos();
-  const pages = { dashboard, inventory, purchases, customers, repairs, reports, employees, subscriptions, settings };
+  if (state.route === "pos") return pos();
+  const pages = {
+    dashboard,
+    repairs,
+    inventory,
+    reports,
+    employees,
+    settings,
+  };
   if (!can(state.adminModule)) state.adminModule = "dashboard";
-  return adminShell((pages[state.adminModule]||dashboard)());
+  return adminShell((pages[state.adminModule] || dashboard)());
 }
 
 function adminShell(content) {
@@ -933,12 +947,50 @@ function dashboard() {
 }
 
 function inventory() {
-  const prods = scoped("products").filter(p=>(`${p.name} ${p.sku} ${p.category}`).toLowerCase().includes(state.filter.toLowerCase()));
-  const t     = currentTenant();
+  if (!CFG.inventory_module_enabled) {
+    return `<div class="empty" style="min-height:300px">
+      Inventory module is disabled for this account.<br>
+      <span style="font-size:13px">Contact your platform admin to enable it.</span>
+    </div>`;
+  }
+  const items = (state.data.inventory || [])
+    .filter(p => (`${p.name} ${p.sku} ${p.category}`)
+      .toLowerCase().includes(state.filter.toLowerCase()));
   return `
-    ${tit("Inventory","Catalog, barcode, stock movement, and low-stock controls.",`<button class="primary-button" data-modal="product">Add Product</button>`)}
-    ${tlb("Search products, SKU, category","product",`<button class="secondary-button" data-action="bulk">Bulk Import</button><button class="secondary-button" data-modal="stock">Stock Adjustment</button>`)}
-    <div class="card">${tbl("Products",["Product","SKU","Category","Cost","Price","Qty","Status",""],prods.map(p=>[productName(p),p.sku,p.category,money(p.cost,t.currency),money(p.price,t.currency),p.qty,stockBadge(p),`<button class="secondary-button" data-modal="product" data-id="${p.id}">Edit</button> <button class="danger-button" data-delete="products" data-id="${p.id}">Delete</button>`]))}</div>`;
+    ${tit("Inventory", "Products, stock levels, and pricing.",
+      `<button class="primary-button" data-modal="inv-add">+ Add Item</button>`)}
+    ${tlb("Search products, SKU…", "inv", "")}
+    <div class="card">
+      ${items.length ? `
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Name</th><th>SKU</th><th>Category</th>
+              <th>Price</th><th>Cost</th><th>Stock</th><th>Status</th><th></th>
+            </tr></thead>
+            <tbody>
+              ${items.map(p => `<tr>
+                <td><strong>${p.name}</strong></td>
+                <td>${p.sku || "—"}</td>
+                <td>${p.category}</td>
+                <td>${money(p.price, CFG.currency)}</td>
+                <td>${money(p.cost, CFG.currency)}</td>
+                <td>${p.qty}</td>
+                <td><span class="badge ${p.qty <= p.min_qty ? "bad" : "good"}">
+                  ${p.qty <= p.min_qty ? "Low Stock" : "In Stock"}
+                </span></td>
+                <td>
+                  <button class="secondary-button"
+                    data-inv-edit="${p.id}">Edit</button>
+                  <button class="danger-button"
+                    data-inv-delete="${p.id}">Delete</button>
+                </td>
+              </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>` :
+        `<div class="empty">No items yet. Add your first product.</div>`}
+    </div>`;
 }
 
 function purchases() {
@@ -1318,6 +1370,44 @@ function modal() {
     // ── PIN prompt ──────────────────────────────────────────────────
     pinPrompt: pinPromptHTML(state.modal?.purpose),
 
+"inv-add": `
+      <form class="modal" data-form="inv-add" style="max-width:500px">
+        <h2>Add Inventory Item</h2>
+        <div class="form-grid">
+          ${fld("Name","name")}
+          ${fld("SKU","sku")}
+          ${fld("Category","category","General")}
+          ${fld("Selling Price","price","0","number")}
+          ${fld("Cost Price","cost","0","number")}
+          ${fld("Quantity","qty","0","number")}
+          ${fld("Min Stock Alert","min_qty","0","number")}
+        </div>
+        ${modalActions()}
+      </form>`,
+
+    "inv-edit": (() => {
+      const item = (state.data.inventory || [])
+        .find(p => String(p.id) === String(id));
+      if (!item) return `<div class="modal"><p>Not found.</p>
+        <div class="modal-actions">
+          <button class="secondary-button" data-close>Close</button>
+        </div></div>`;
+      return `
+        <form class="modal" data-form="inv-edit" style="max-width:500px">
+          <h2>Edit Item</h2>
+          <input type="hidden" name="id" value="${item.id}">
+          <div class="form-grid">
+            ${fld("Name","name",item.name)}
+            ${fld("SKU","sku",item.sku)}
+            ${fld("Category","category",item.category)}
+            ${fld("Selling Price","price",item.price,"number")}
+            ${fld("Cost Price","cost",item.cost,"number")}
+            ${fld("Quantity","qty",item.qty,"number")}
+            ${fld("Min Stock Alert","min_qty",item.min_qty,"number")}
+          </div>
+          ${modalActions()}
+        </form>`;
+    })(),
   };
 
   return `<div class="modal-backdrop">${forms[type] || ""}</div>`;
@@ -1519,7 +1609,8 @@ document.addEventListener("click", async event => {
     "[data-modal],[data-close],[data-settings-tab]," +
     "[data-pin-key],[data-pp-key],[data-comp],[data-remove-comp]," +
     "[data-tc-add],[data-tc-remove],[data-tc-decline],[data-tc-confirm]," +
-    "[data-settle-id],[data-action],[data-remove-quick],[data-quick-collect]"
+    "[data-settle-id],[data-action],[data-remove-quick],[data-quick-collect]," +
+    "[data-inv-edit],[data-inv-delete]"
   );
   if (!el) return;
 
@@ -1755,6 +1846,19 @@ if (el.dataset.action === "save-quick-comps") {
   if (el.dataset.action === "open-return") {
     state.modal = { type: "returnFlow" }; render(); return;
   }
+
+  // ── Inventory ────────────────────────────────────────────────────
+  if (el.dataset.invEdit) {
+    state.modal = { type: "inv-edit", id: el.dataset.invEdit };
+    render(); return;
+  }
+  if (el.dataset.invDelete) {
+    if (!confirm("Delete this item?")) return;
+    const { error } = await sb.from("inventory")
+      .delete().eq("id", Number(el.dataset.invDelete));
+    if (error) { alert("Error: " + error.message); return; }
+    await load(); return;
+  }
 });
 
 /* ── Input ───────────────────────────────────────────────────────── */
@@ -1905,7 +2009,35 @@ if (logoFile) {
     }
     state.modal = null; render(); return;
   }
+if (type === "inv-add") {
+    const { error } = await sb.from("inventory").insert({
+      name:     data.name,
+      sku:      data.sku      || "",
+      category: data.category || "General",
+      price:    Number(data.price  || 0),
+      cost:     Number(data.cost   || 0),
+      qty:      Number(data.qty    || 0),
+      min_qty:  Number(data.min_qty|| 0),
+    });
+    if (error) { alert("Error: " + error.message); return; }
+    state.modal = null;
+    await load(); return;
+  }
 
+  if (type === "inv-edit") {
+    const { error } = await sb.from("inventory").update({
+      name:     data.name,
+      sku:      data.sku,
+      category: data.category,
+      price:    Number(data.price),
+      cost:     Number(data.cost),
+      qty:      Number(data.qty),
+      min_qty:  Number(data.min_qty),
+    }).eq("id", Number(data.id));
+    if (error) { alert("Error: " + error.message); return; }
+    state.modal = null;
+    await load(); return;
+  }
   state.modal = null;
   await load();
 });
