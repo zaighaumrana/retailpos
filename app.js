@@ -109,7 +109,7 @@ function currentTenant() {
     currency:            CFG.currency         || "Rs.",
     taxRate:             Number(CFG.tax_rate  || 0),
     receiptFooter:       CFG.terms_text       || "",
-    repairModuleEnabled: true,
+    repairModuleEnabled: CFG.repair_module_enabled !== false,
     logo:                CFG.shop_logo        || "",
     businessDescription: CFG.shop_description || "",
     plan:                "Premium",
@@ -613,15 +613,13 @@ function pageContent() {
 
 function adminShell(content) {
   const tenant = currentTenant();
+  const modLabel = ADMIN_MODULES.find(([k]) => k === state.adminModule)?.[2] || "";
   return `
     <div class="admin-header">
       <div>
-        <h1>Business Admin</h1>
-        <p class="muted">${tenant.name} · ${ADMIN_MODULES.find(([k])=>k===state.adminModule)?.[2]||""}</p>
+        <h1>${modLabel}</h1>
+        <p class="muted">${tenant.name}</p>
       </div>
-      <select class="tenant-switcher compact-select" data-action="role">
-        ${["Business Owner","Manager","Cashier","Technician","Inventory Staff"].map(r=>`<option ${r===state.role?"selected":""}>${r}</option>`).join("")}
-      </select>
     </div>
     ${content}
   `;
@@ -724,119 +722,181 @@ function settingsTabContent() {
 ═══════════════════════════════════════════════════════════════════ */
 function pos() {
   const tenant   = currentTenant();
-  const products = scoped("products").filter(p=>(state.category==="All"||p.category===state.category)&&p.name.toLowerCase().includes(state.filter.toLowerCase()));
-  const cats     = ["All",...new Set(scoped("products").map(p=>p.category))];
-  const subtotal = state.cart.reduce((s,i)=>s+i.soldPrice*i.qty,0);
-  const disc     = state.cart.reduce((s,i)=>s+(i.originalPrice-i.soldPrice)*i.qty,0);
-  const tax      = subtotal*(tenant.taxRate/100);
+  const subtotal = state.cart.reduce((s, i) => s + i.soldPrice * i.qty, 0);
+  const disc     = state.cart.reduce((s, i) => s + (i.originalPrice - i.soldPrice) * i.qty, 0);
+  const tax      = subtotal * (tenant.taxRate / 100);
 
   return `
     <div class="page-title">
       <div>
         <h1>Point of Sale</h1>
-        <p class="muted">Counter workspace · ${tenant.name}</p>
+        <p class="muted">Counter · ${tenant.name}
+          ${SESSION.employee ? `· <strong>${SESSION.employee.name}</strong>` : ""}
+        </p>
       </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <button class="secondary-button" data-action="shift-stats">📋 Shift Stats</button>
         ${tenant.repairModuleEnabled ? `
-  <button class="primary-button" data-modal="repair">+ New Repair Ticket</button>
-  <button class="secondary-button" data-action="add-ticket-to-cart">Collect Repair</button>
-` : ""}
-<button class="secondary-button" data-action="open-return">Return / Refund</button>
-<button class="secondary-button" data-action="open-udhar">Outstanding Credits</button>
+          <button class="primary-button" data-modal="repair">+ New Ticket</button>
+          <button class="secondary-button" data-action="add-ticket-to-cart">Collect Repair</button>
+        ` : ""}
+        <button class="secondary-button" data-action="open-return">↩ Return</button>
+        <button class="secondary-button" data-action="open-udhar">₨ Credits</button>
       </div>
     </div>
+
     <div class="grid pos-layout">
-      <div class="grid">
-        <input class="search" data-filter="product" value="${state.filter}" placeholder="Search products or scan barcode">
-        <div class="category-tabs">${cats.map(c=>`<button class="${c===state.category?"primary-button":"secondary-button"}" data-category="${c}">${c}</button>`).join("")}</div>
-        <div class="grid product-grid">${products.map(p=>`
-          <button class="product-card" data-add-cart="${p.id}">
-            <div class="product-img">${p.image?`<img alt="" src="${p.image}">`:`${p.name.slice(0,1)}`}</div>
-            <strong>${p.name}</strong>
-            <span class="muted">${p.qty} in stock · ${p.sku}</span>
-            <strong>${money(p.price,tenant.currency)}</strong>
-          </button>`).join("")}
-        </div>
+      <!-- Left: Recent tickets as quick-add if repair module on -->
+      <div class="grid" style="align-content:start;gap:12px">
+        ${tenant.repairModuleEnabled ? `
+          <div class="card">
+            <h2 style="margin-bottom:12px">Open Repair Tickets</h2>
+            ${(state.data.tickets || [])
+              .filter(t => !["Delivered","Declined"].includes(t.status))
+              .slice(0, 8)
+              .map(t => `
+                <div class="list-row" style="margin-bottom:6px">
+                  <div>
+                    <strong>${t.ticket_number}</strong>
+                    <span class="badge warn" style="margin-left:6px">${t.status}</span><br>
+                    <small class="muted">${t.customer_name} · ${t.device_brand} ${t.device_model}</small>
+                  </div>
+                  <button class="primary-button" style="font-size:12px;padding:6px 10px"
+                    data-quick-collect="${t.id}">Collect</button>
+                </div>`).join("") ||
+              `<div class="empty">No open tickets.</div>`}
+          </div>
+        ` : `
+          <div class="card">
+            <h2>Quick Sale</h2>
+            <p class="muted" style="font-size:13px">
+              Add items to cart using the cart panel.
+              Inventory module can be enabled from Platform Admin.
+            </p>
+          </div>
+        `}
       </div>
+
+      <!-- Right: Cart -->
       <aside class="card cart">
         <h2>Cart</h2>
-        ${state.cart.length?state.cart.map(item=>`
+        ${state.cart.length ? state.cart.map(item => `
           <div class="cart-line">
-            <div><strong>${item.name}</strong><br><small class="muted">${money(item.soldPrice,tenant.currency)} each${item.reason?" · "+item.reason:""}</small></div>
+            <div>
+              <strong>${item.name}</strong><br>
+              <small class="muted">${money(item.soldPrice, tenant.currency)} each
+                ${item.reason ? " · " + item.reason : ""}
+              </small>
+            </div>
             <div class="qty-controls">
               <button data-qty="${item.productId}" data-delta="-1">−</button>
               <strong>${item.qty}</strong>
               <button data-qty="${item.productId}" data-delta="1">+</button>
             </div>
-            <button class="secondary-button" data-modal="override" data-id="${item.productId}">Override</button>
-          </div>`).join(""):`<div class="empty">Tap a product to add it.</div>`}
+            <button class="secondary-button"
+              data-modal="override" data-id="${item.productId}">Price</button>
+          </div>`).join("") :
+          `<div class="empty">No items in cart.</div>`}
+
         <div class="totals">
-          <div class="total-row"><span>Subtotal</span><strong>${money(subtotal,tenant.currency)}</strong></div>
-          <div class="total-row"><span>Discounts</span><strong>${money(disc,tenant.currency)}</strong></div>
-          <div class="total-row"><span>Tax ${tenant.taxRate}%</span><strong>${money(tax,tenant.currency)}</strong></div>
-          <div class="total-row grand"><span>Total</span><strong>${money(subtotal+tax,tenant.currency)}</strong></div>
+          <div class="total-row">
+            <span>Subtotal</span>
+            <strong>${money(subtotal, tenant.currency)}</strong>
+          </div>
+          ${disc > 0 ? `
+          <div class="total-row">
+            <span>Discounts</span>
+            <strong style="color:var(--success)">− ${money(disc, tenant.currency)}</strong>
+          </div>` : ""}
+          ${tax > 0 ? `
+          <div class="total-row">
+            <span>Tax ${tenant.taxRate}%</span>
+            <strong>${money(tax, tenant.currency)}</strong>
+          </div>` : ""}
+          <div class="total-row grand">
+            <span>Total</span>
+            <strong>${money(subtotal + tax, tenant.currency)}</strong>
+          </div>
         </div>
+
         <select class="tenant-switcher" data-action="payment">
-  <option>Cash</option>
-  <option>Raast</option>
-  <option>JazzCash</option>
-  <option>EasyPaisa</option>
-  <option>Bank Transfer</option>
-  <option>Udhar (Credit)</option>
-</select>
-${state.checkoutPayment === "Udhar (Credit)" ? `
-  <div style="display:grid;gap:8px">
-    <input class="search" placeholder="Customer name *"
-      data-udhar="name" value="${state.udharName || ""}">
-    <input class="search" placeholder="Customer phone *"
-      data-udhar="phone" value="${state.udharPhone || ""}">
-  </div>` : ""}
-        <button class="primary-button" data-action="checkout" ${state.cart.length?"":"disabled"}>Checkout & Receipt</button>
+          <option ${state.checkoutPayment==="Cash"?"selected":""}>Cash</option>
+          <option ${state.checkoutPayment==="Raast"?"selected":""}>Raast</option>
+          <option ${state.checkoutPayment==="JazzCash"?"selected":""}>JazzCash</option>
+          <option ${state.checkoutPayment==="EasyPaisa"?"selected":""}>EasyPaisa</option>
+          <option ${state.checkoutPayment==="Bank Transfer"?"selected":""}>Bank Transfer</option>
+          <option ${state.checkoutPayment==="Udhar (Credit)"?"selected":""}>Udhar (Credit)</option>
+        </select>
+
+        ${state.checkoutPayment === "Udhar (Credit)" ? `
+          <div style="display:grid;gap:8px">
+            <input class="search" placeholder="Customer name *"
+              data-udhar="name" value="${state.udharName || ""}">
+            <input class="search" placeholder="Customer phone *"
+              data-udhar="phone" value="${state.udharPhone || ""}">
+          </div>` : ""}
+
+        <button class="primary-button" data-action="checkout"
+          ${state.cart.length ? "" : "disabled"}>
+          Checkout & Receipt
+        </button>
       </aside>
     </div>`;
 }
 
 /* ── Shift stats HTML (print-safe) ─────────────────────────────── */
 function buildShiftStats() {
-  const tenant   = currentTenant();
-  const employee = scoped("employees").find(e=>e.role===state.role&&e.status==="Active") || scoped("employees").find(e=>e.role==="Cashier") || scoped("employees")[0];
-  const date     = today.toISOString().slice(0,10);
-  const shiftSales  = scoped("sales").filter(s=>s.cashier===employee?.name&&s.date.slice(0,10)===date);
-  const itemsSold   = shiftSales.reduce((s,sale)=>s+sale.items.reduce((x,i)=>x+i.qty,0),0);
-  const cashEarned  = shiftSales.reduce((s,sale)=>s+sale.total,0);
-  const cashOnly    = shiftSales.filter(s=>s.payment==="Cash"||s.payment==="Mixed Payment").reduce((s,sale)=>s+sale.total,0);
-  const discounts   = shiftSales.reduce((s,sale)=>s+sale.items.reduce((x,i)=>x+i.discount*i.qty,0),0);
-  const custCount   = new Set(shiftSales.map(s=>s.customer)).size;
-  const shiftTkts   = scoped("repairs").filter(r=>(r.createdBy===employee?.name||r.technician===employee?.name)&&(r.createdAt||"").slice(0,10)===date);
-  const pendingAll  = scoped("repairs").filter(r=>!["Delivered","Cancelled"].includes(r.status));
-  const processed   = shiftTkts.filter(r=>["Delivered","Ready for Pickup"].includes(r.status));
-  const stillPend   = shiftTkts.filter(r=>!["Delivered","Cancelled"].includes(r.status));
+  const tenant    = currentTenant();
+  const todayStr  = new Date().toISOString().slice(0, 10);
+  const empName   = SESSION.employee?.name || "";
+  const allSales  = state.data.sales || [];
+  const allTickets= state.data.tickets || [];
+
+  const shiftSales = allSales.filter(s =>
+    (s.created_at || "").slice(0, 10) === todayStr &&
+    (!empName || s.employee_name === empName)
+  );
+
+  const itemsSold  = shiftSales.reduce((s, sale) =>
+    s + (sale.items_sold || []).reduce((x, i) => x + (i.qty || 1), 0), 0);
+  const cashEarned = shiftSales.reduce((s, sale) => s + Number(sale.total_bill || 0), 0);
+  const cashOnly   = shiftSales
+    .filter(s => s.payment_method === "Cash")
+    .reduce((s, sale) => s + Number(sale.total_bill || 0), 0);
+  const discounts  = shiftSales.reduce((s, sale) => s + Number(sale.discount || 0), 0);
+  const custCount  = new Set(shiftSales.map(s => s.customer_name).filter(Boolean)).size;
+
+  const shiftTkts  = allTickets.filter(t =>
+    (t.created_at || "").slice(0, 10) === todayStr &&
+    (!empName || t.created_by === empName)
+  );
+  const pendingAll = allTickets.filter(t => !["Delivered","Declined"].includes(t.status));
+  const processed  = shiftTkts.filter(t => t.status === "Delivered");
+  const stillPend  = shiftTkts.filter(t => !["Delivered","Declined"].includes(t.status));
 
   return `
     <div class="shift-print">
       <center>
         <strong style="font-size:15px">${tenant.name}</strong><br>
-        Shift Summary &mdash; ${date}<br>
-        ${employee?.name||"Counter Employee"} &nbsp;&bull;&nbsp; ${state.role}
+        Shift Summary — ${todayStr}<br>
+        ${empName || "All Staff"}
       </center>
-      <hr>
+      <hr style="border:none;border-top:1px dashed #bbb;margin:8px 0">
       <div class="section-head">Sales</div>
       <div class="stat-row"><span class="stat-label">Products sold</span><span class="stat-val">${itemsSold}</span></div>
-      <div class="stat-row"><span class="stat-label">Total revenue</span><span class="stat-val">${money(cashEarned,tenant.currency)}</span></div>
-      <div class="stat-row"><span class="stat-label">Cash collected</span><span class="stat-val">${money(cashOnly,tenant.currency)}</span></div>
-      <div class="stat-row"><span class="stat-label">Discounts given</span><span class="stat-val">${money(discounts,tenant.currency)}</span></div>
+      <div class="stat-row"><span class="stat-label">Total revenue</span><span class="stat-val">${money(cashEarned, tenant.currency)}</span></div>
+      <div class="stat-row"><span class="stat-label">Cash collected</span><span class="stat-val">${money(cashOnly, tenant.currency)}</span></div>
+      <div class="stat-row"><span class="stat-label">Discounts given</span><span class="stat-val">${money(discounts, tenant.currency)}</span></div>
       <div class="stat-row"><span class="stat-label">Customers served</span><span class="stat-val">${custCount}</span></div>
-      ${tenant.repairModuleEnabled?`
-      <hr>
-      <div class="section-head">Repair Tickets</div>
-      <div class="stat-row"><span class="stat-label">Tickets created this shift</span><span class="stat-val">${shiftTkts.length}</span></div>
-      <div class="stat-row"><span class="stat-label">Pending from this shift</span><span class="stat-val">${stillPend.length}</span></div>
-      <div class="stat-row"><span class="stat-label">Successfully processed</span><span class="stat-val">${processed.length}</span></div>
-      <div class="stat-row"><span class="stat-label">Pending from everyone</span><span class="stat-val">${pendingAll.length}</span></div>
-      ${shiftTkts.length?`<hr><div class="section-head">This Shift Ticket List</div>${shiftTkts.map(r=>`<div class="stat-row"><span class="stat-label">${r.ticket} &nbsp;${r.customer}</span><span class="stat-val">${r.status}</span></div>`).join("")}`:""}
-      `:""}
-      <hr>
+      ${tenant.repairModuleEnabled ? `
+        <hr style="border:none;border-top:1px dashed #bbb;margin:8px 0">
+        <div class="section-head">Repair Tickets</div>
+        <div class="stat-row"><span class="stat-label">Created this shift</span><span class="stat-val">${shiftTkts.length}</span></div>
+        <div class="stat-row"><span class="stat-label">Delivered this shift</span><span class="stat-val">${processed.length}</span></div>
+        <div class="stat-row"><span class="stat-label">Pending from this shift</span><span class="stat-val">${stillPend.length}</span></div>
+        <div class="stat-row"><span class="stat-label">All pending (shop-wide)</span><span class="stat-val">${pendingAll.length}</span></div>
+      ` : ""}
+      <hr style="border:none;border-top:1px dashed #bbb;margin:8px 0">
       <center style="color:#888;font-size:11px">Printed ${new Date().toLocaleString()}</center>
     </div>`;
 }
@@ -1459,9 +1519,19 @@ document.addEventListener("click", async event => {
     "[data-modal],[data-close],[data-settings-tab]," +
     "[data-pin-key],[data-pp-key],[data-comp],[data-remove-comp]," +
     "[data-tc-add],[data-tc-remove],[data-tc-decline],[data-tc-confirm]," +
-    "[data-settle-id],[data-action],[data-remove-quick]"
+    "[data-settle-id],[data-action],[data-remove-quick],[data-quick-collect]"
   );
   if (!el) return;
+
+    // ── Quick collect from ticket list on POS ────────────────────────
+  if (el.dataset.quickCollect) {
+    const found = state.data.tickets.find(t => String(t.id) === String(el.dataset.quickCollect));
+    if (!found) return;
+    state.cartTicketId = found.id;
+    state.cartAdvance  = Number(found.advance_payment || 0);
+    state.modal        = { type: "ticketCheckout", id: String(found.id) };
+    render(); return;
+  }
 if (el.dataset.removeQuick !== undefined) {
   const comps = [...(CFG.quick_components || [])];
   comps.splice(Number(el.dataset.removeQuick), 1);
@@ -1801,7 +1871,7 @@ document.addEventListener("submit", async event => {
   // ── Business settings ─────────────────────────────────────────────
   if (type === "settings") {
     const updates = {};
-    js// Logo upload — convert to base64 and store in shop_config
+    // Logo upload — convert to base64 and store in shop_config
 const logoFile = form.querySelector('[name="logo"]')?.files?.[0];
 if (logoFile) {
   const base64 = await new Promise(res => {
@@ -1839,12 +1909,6 @@ if (logoFile) {
   state.modal = null;
   await load();
 });
-
-/* ── Lifecycle ───────────────────────────────────────────────────── */
-window.addEventListener("online",  ()=>{ state.online=true;  load(); });
-window.addEventListener("offline", ()=>{ state.online=false; render(); });
-window.addEventListener("beforeinstallprompt", event=>{ event.preventDefault(); state.installPrompt=event; render(); });
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js");
 
 /* ── Boot ─────────────────────────────────────────────────────────── */
 window.addEventListener("online",  () => { state.online = true;  render(); });
