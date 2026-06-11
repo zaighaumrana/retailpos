@@ -1,174 +1,133 @@
 /* ═══════════════════════════════════════════════════════════════════
-   RetailOS  —  Shop App  (index.html)
-   Serves: POS counter staff + Business Admin back-office
-   Does NOT contain any platform-admin code.
+   RetailOS — Shop App
+   Backend: Supabase (replaces IndexedDB + Google Sheets)
 ═══════════════════════════════════════════════════════════════════ */
+import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
 
-const DB_NAME    = "retailos-demo";
-const DB_VERSION = 1;
-const STORES     = ["tenants","products","customers","employees","sales","repairs","movements","settings","syncQueue","conflicts"];
+const SUPABASE_URL  = "https://kxmovywgshyltwusghhj.supabase.co";   // e.g. https://xxxx.supabase.co
+const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt4bW92eXdnc2h5bHR3dXNnaGhqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExODM2OTIsImV4cCI6MjA5Njc1OTY5Mn0.JGDedCaow_Vg5Pk5RC6XprzKmRsaCCUNGWg1TaWAGLg";
+const sb            = createClient(SUPABASE_URL, SUPABASE_ANON);
 
-const money  = (v, sym = "$") => `${sym}${Number(v||0).toLocaleString(undefined,{maximumFractionDigits:2})}`;
-const today  = new Date("2026-06-09T10:30:00");
+const money  = (v, sym = "Rs.") => `${sym} ${Number(v||0).toLocaleString(undefined,{maximumFractionDigits:0})}`;
 const params = new URLSearchParams(location.search);
 
+// ── App state (no tenantId needed — single shop per Supabase project) ──
 const state = {
-  route:       params.get("route")  || "pos",   // "pos" | "admin"
-  adminModule: params.get("module") || "dashboard",
-  tenantId:    params.get("tenant") || "tenant-mobile",
-  role:        "Business Owner",
-  theme:       localStorage.getItem("retailos-theme") || "light",
-  online:      navigator.onLine,
-  syncing:     false,
-  filter:      "",
-  category:    "All",
-  cart:        [],
-  data:        {},
-  modal:       null,
-  installPrompt: null,
-  settingsTab: "branding",   // "branding" | "contact" | "receipt"
+  route:        params.get("route") || "pos",
+  adminModule:  "dashboard",
+  role:         "Business Owner",
+  theme:        localStorage.getItem("retailos-theme") || "light",
+  online:       navigator.onLine,
+  filter:       "",
+  category:     "All",
+  cart:         [],
+  data:         { tickets:[], sales:[], employees:[], udhar:[], returns:[], config:{} },
+  modal:        null,
+  installPrompt:null,
+  settingsTab:  "branding",
+  checkoutPayment: "Cash",
+  cartTicketId:    null,
+  udharName:       "",
+  udharPhone:      "",
 };
 
-/* ── Demo seed data ─────────────────────────────────────────────── */
-const demo = {
-  tenants: [
-    { id:"tenant-mobile",  name:"FixPoint Mobile Care",  industry:"Mobile Repair Shop", status:"Active",    plan:"Premium",  address:"42 Market Street, Lahore",     phone:"+92 300 555 0188", whatsapp:"+92 300 555 0188", email:"hello@fixpoint.demo",      receiptFooter:"Thank you for choosing FixPoint. Warranty applies to listed parts only.", primaryColor:"#126c5b", secondaryColor:"#e9b949", currency:"$", taxRate:8.5, logo:"", businessDescription:"Premium mobile repair, accessories, and device resale service.", repairModuleEnabled:true  },
-    { id:"tenant-fashion", name:"Urban Thread Co.",       industry:"Fashion Store",       status:"Active",    plan:"Standard", address:"9 Studio Avenue, Karachi",     phone:"+92 321 887 2200", whatsapp:"+92 321 887 2200", email:"sales@urbanthread.demo",  receiptFooter:"Exchange within 7 days with receipt.",                                   primaryColor:"#244c7a", secondaryColor:"#c88d47", currency:"$", taxRate:5,   logo:"", businessDescription:"Fashion retail and accessories showroom.",                    repairModuleEnabled:false },
-    { id:"tenant-grocery", name:"FreshBasket Retail",     industry:"Grocery Store",       status:"Suspended", plan:"Basic",    address:"18 Green Lane, Islamabad",     phone:"+92 333 111 4400", whatsapp:"+92 333 111 4400", email:"care@freshbasket.demo",   receiptFooter:"Fresh goods, fair prices.",                                              primaryColor:"#2f6f46", secondaryColor:"#d8a31a", currency:"$", taxRate:3,   logo:"", businessDescription:"Neighborhood grocery and daily essentials store.",            repairModuleEnabled:false },
-  ],
-  products: [
-    ["iPhone 14 Screen","SCR-IP14","Repair Parts","Apple",78,129,14,4],
-    ["Samsung A54 Battery","BAT-A54","Repair Parts","Samsung",22,45,28,8],
-    ["USB-C Fast Charger","CHG-45W","Accessories","Anker",12,25,44,12],
-    ["Tempered Glass Pack","GLS-MIX","Accessories","ClearPro",2.2,8,110,30],
-    ["Bluetooth Earbuds","AUD-BUDS","Electronics","Soundix",19,39,18,6],
-    ["Refurbished iPhone X","PHN-IPX","Phones","Apple",160,249,5,2],
-    ["Laptop SSD 512GB","SSD-512","Computer Parts","Kingston",31,59,21,5],
-    ["Phone Grip Stand","ACC-GRIP","Accessories","PopOne",1.6,7,67,15],
-  ],
-  customers: [
-    ["Ayesha Khan","+92 300 111 2233","ayesha@example.com","Gulberg, Lahore",420],
-    ["Hamza Malik","+92 321 444 8922","hamza@example.com","DHA Phase 5",250],
-    ["Sara Ahmed","+92 333 299 4477","sara@example.com","Johar Town",680],
-    ["Bilal Raza","+92 345 908 1200","bilal@example.com","Model Town",98],
-    ["Nadia Tariq","+92 307 201 5550","nadia@example.com","Cantt",310],
-  ],
-  employees: [
-    ["Mariam Siddiqui","+92 300 333 1000","mariam@fixpoint.demo","Business Owner","Active"],
-    ["Usman Qureshi","+92 301 222 4400","usman@fixpoint.demo","Manager","Active"],
-    ["Hina Baloch","+92 302 445 9012","hina@fixpoint.demo","Cashier","Active"],
-    ["Ali Imran","+92 303 991 1177","ali@fixpoint.demo","Technician","Active"],
-    ["Zain Noor","+92 304 660 3322","zain@fixpoint.demo","Inventory Staff","Disabled"],
-  ],
+// ── Session (employee logged in via PIN) ──
+let SESSION = { employee: null, loginSkipped: false };
+
+// ── Config cache (from shop_config table) ──
+let CFG = {
+  admin_password:       "1234",
+  strict_login_mode:    false,
+  discount_pin_required:true,
+  partial_udhar_allowed:true,
+  quick_components:     ["Screen","Battery","Body","Board","Camera","Mic","Speaker","Charging Port","Back Glass","SIM Tray","Power Button","Volume Button"],
+  terms_text:           "Warranty: 30 days on parts replaced.",
+  shop_name:            "FixPoint Mobile Care",
+  shop_address:         "42 Market Street, Lahore",
+  shop_phone:           "+92 300 555 0188",
+  primary_color:        "#126c5b",
+  secondary_color:      "#e9b949",
+  currency:             "Rs.",
+  tax_rate:             0,
 };
 
-/* ── IndexedDB repo ─────────────────────────────────────────────── */
-function openDb() {
-  return new Promise((res,rej) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      STORES.forEach(s => { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s,{keyPath:"id"}); });
-    };
-    req.onsuccess = () => res(req.result);
-    req.onerror  = () => rej(req.error);
-  });
-}
-const repo = {
-  async all(store) {
-    const db  = await openDb();
-    return new Promise((res,rej) => { const r = db.transaction(store,"readonly").objectStore(store).getAll(); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); });
-  },
-  async put(store, item, queue=false) {
-    const db = await openDb();
-    const stamped = { ...item, updatedAt: new Date().toISOString() };
-    await new Promise((res,rej) => { const tx=db.transaction(store,"readwrite"); tx.objectStore(store).put(stamped); tx.oncomplete=res; tx.onerror=()=>rej(tx.error); });
-    if (queue) await repo.queue({ entity:store, action:"upsert", recordId:stamped.id, payload:stamped });
-    return stamped;
-  },
-  async delete(store, id, queue=true) {
-    const db = await openDb();
-    await new Promise((res,rej) => { const tx=db.transaction(store,"readwrite"); tx.objectStore(store).delete(id); tx.oncomplete=res; tx.onerror=()=>rej(tx.error); });
-    if (queue) await repo.queue({ entity:store, action:"delete", recordId:id });
-  },
-  async queue(change) {
-    return repo.put("syncQueue",{ id:uid("sync"), status:"Pending Sync", createdAt:new Date().toISOString(), ...change },false);
-  },
-  async clear(store) {
-    const db = await openDb();
-    await new Promise((res,rej) => { const tx=db.transaction(store,"readwrite"); tx.objectStore(store).clear(); tx.oncomplete=res; tx.onerror=()=>rej(tx.error); });
-  },
-};
+function uid(p) { return `${p}-${Math.random().toString(36).slice(2,7).toUpperCase()}`; }
 
-function uid(p) { return `${p}-${Math.random().toString(36).slice(2,9)}-${Date.now().toString(36)}`; }
-
-/* ── Seed ───────────────────────────────────────────────────────── */
-function tenantRows(rows, factory) { return demo.tenants.flatMap((t,ti) => rows.map((r,i) => factory(r,t,ti,i))); }
-
-async function seed() {
-  const tenants = await repo.all("tenants");
-  if (tenants.length) return;
-  for (const t of demo.tenants) await repo.put("tenants", t);
-  const products = tenantRows(demo.products,(p,tenant,ti,i) => ({
-    id:`${tenant.id}-prod-${i}`, tenantId:tenant.id,
-    name: ti ? p[0].replace("iPhone","Premium").replace("Samsung","Everyday") : p[0],
-    sku:`${p[1]}-${ti+1}`, barcode:`9000${ti}${i}334`,
-    category: ti===1?["Apparel","Accessories","Footwear"][i%3]:ti===2?["Grocery","Household","Fresh"][i%3]:p[2],
-    brand:p[3], cost:p[4], price:p[5], qty:p[6], min:p[7], image:"",
-    description:"Demo catalog item.", notes:"Popular in recent transactions.",
-  }));
-  for (const p of products) await repo.put("products",p);
-  const customers = tenantRows(demo.customers,(c,tenant,ti,i) => ({ id:`${tenant.id}-cust-${i}`, tenantId:tenant.id, name:c[0], phone:c[1], email:c[2], address:c[3], notes:"Prefers WhatsApp updates.", loyalty:c[4]+ti*25 }));
-  for (const c of customers) await repo.put("customers",c);
-  const employees = tenantRows(demo.employees,(e,tenant,ti) => ({ id:`${tenant.id}-emp-${demo.employees.indexOf(e)}`, tenantId:tenant.id, name:e[0], phone:e[1], email:e[2].replace("fixpoint",tenant.name.toLowerCase().replaceAll(" ","").replaceAll(".","")), role:e[3], status:e[4] }));
-  for (const e of employees) await repo.put("employees",e);
-  const statuses = ["Received","Diagnosing","Waiting for Parts","In Progress","Ready for Pickup","Delivered","Cancelled"];
-  for (let i=0;i<16;i++) {
-    await repo.put("repairs",{ id:`repair-${i}`, tenantId:"tenant-mobile", ticket:`FP-${2400+i}`, customer:demo.customers[i%5][0], phone:demo.customers[i%5][1], brand:["Apple","Samsung","Xiaomi","Oppo"][i%4], model:["iPhone 13","Galaxy A54","Redmi Note 12","Reno 8"][i%4], imei:`3567${i}882233441`, serial:`SN${i}X${Date.now().toString().slice(-5)}`, issue:["No display","Battery swelling","Charging port loose","Speaker distortion"][i%4], notes:"Diagnostic recorded.", technician:["Ali Imran","Usman Qureshi"][i%2], parts:["Screen","Battery","Charging flex","Speaker"][i%4], labor:25+i*2, total:65+i*9, warranty:`${30+(i%3)*30} days`, eta:new Date(today.getTime()+(i%8)*86400000).toISOString().slice(0,10), status:statuses[i%statuses.length], createdBy:i%2?"Hina Baloch":"Ali Imran", createdAt:new Date(today.getTime()-(i%5)*86400000).toISOString(), timeline:["Received at counter","Diagnostic completed","Customer notified"].slice(0,1+(i%3)) });
+// ── Load config from Supabase ──────────────────────────────────────
+async function loadConfig() {
+  const { data, error } = await sb.from("shop_config").select("*").single();
+  if (error) { console.warn("Config load failed, using defaults.", error.message); return; }
+  // shop_config is a single row — merge into CFG
+  Object.assign(CFG, data);
+  // quick_components may be stored as JSONB array already parsed by Supabase
+  if (typeof CFG.quick_components === "string") {
+    try { CFG.quick_components = JSON.parse(CFG.quick_components); } catch {}
   }
-  const pmts = ["Cash","Card","Bank Transfer","Mixed Payment"];
-  const base = (await repo.all("products")).filter(p=>p.tenantId==="tenant-mobile");
-  for (let i=0;i<30;i++) {
-    const item = base[i%base.length];
-    const qty  = 1+(i%3);
-    const disc = i%5===0?8:0;
-    const sold = Math.max(1,item.price-disc);
-    await repo.put("sales",{ id:`sale-${i}`, tenantId:"tenant-mobile", receiptNo:`R-${1040+i}`, date:new Date(today.getTime()-i*86400000).toISOString(), cashier:"Hina Baloch", customer:demo.customers[i%5][0], items:[{productId:item.id,name:item.name,qty,originalPrice:item.price,soldPrice:sold,discount:disc,reason:disc?"Manager-approved demo discount":""}], subtotal:sold*qty, tax:sold*qty*0.085, total:sold*qty*1.085, profit:(sold-item.cost)*qty, payment:pmts[i%4], syncStatus:"Synced" });
-  }
-  await repo.put("settings",{id:"app",theme:state.theme,installedPromptDismissed:false});
+  applyBranding();
 }
 
-/* ── Sync ───────────────────────────────────────────────────────── */
-async function syncPending() {
-  if (!state.online||state.syncing) return;
-  const queue = await repo.all("syncQueue");
-  if (!queue.length) return;
-  state.syncing = true; render();
-  await new Promise(res=>setTimeout(res,900));
-  for (const c of queue) await repo.delete("syncQueue",c.id,false);
-  if (Math.random()>0.82) await repo.put("conflicts",{id:uid("conflict"),tenantId:state.tenantId,message:"Remote inventory timestamp differed from local stock adjustment.",createdAt:new Date().toISOString()});
-  state.syncing = false;
-  await load();
-}
-
-/* ── Data helpers ───────────────────────────────────────────────── */
+// ── Load all operational data ──────────────────────────────────────
 async function load() {
-  const [tenants,products,customers,employees,sales,repairs,queue,conflicts] = await Promise.all([repo.all("tenants"),repo.all("products"),repo.all("customers"),repo.all("employees"),repo.all("sales"),repo.all("repairs"),repo.all("syncQueue"),repo.all("conflicts")]);
-  state.data = { tenants,products,customers,employees,sales,repairs,queue,conflicts };
-  applyBranding(currentTenant());
+  await loadConfig();
+  const [tickets, sales, employees, udhar, returns_] = await Promise.all([
+    sb.from("tickets").select("*").order("id", { ascending: false }),
+    sb.from("sales").select("*").order("id", { ascending: false }),
+    sb.from("employees").select("id, name, role, status").order("name"), // never fetch pin_code on load
+    sb.from("udhar").select("*").order("id", { ascending: false }),
+    sb.from("returns").select("*").order("id", { ascending: false }),
+  ]);
+  state.data = {
+    tickets:   tickets.data   || [],
+    sales:     sales.data     || [],
+    employees: employees.data || [],
+    udhar:     udhar.data     || [],
+    returns:   returns_.data  || [],
+    config:    CFG,
+  };
+  applyBranding();
   render();
-  syncPending();
 }
 
-function currentTenant() {
-  return { businessDescription:"Retail business workspace.", repairModuleEnabled:true, ...(state.data.tenants?.find(t=>t.id===state.tenantId)||demo.tenants[0]) };
-}
-function scoped(store) { return (state.data[store]||[]).filter(i=>i.tenantId===state.tenantId); }
-function applyBranding(t) {
+// ── Branding from CFG (no tenant object needed) ────────────────────
+function applyBranding() {
   document.documentElement.dataset.theme = state.theme;
-  document.documentElement.style.setProperty("--primary",  t.primaryColor  ||"#126c5b");
-  document.documentElement.style.setProperty("--secondary",t.secondaryColor||"#e9b949");
-  document.querySelector('meta[name="theme-color"]')?.setAttribute("content",t.primaryColor||"#126c5b");
+  document.documentElement.style.setProperty("--primary",   CFG.primary_color   || "#126c5b");
+  document.documentElement.style.setProperty("--secondary", CFG.secondary_color || "#e9b949");
+  document.querySelector('meta[name="theme-color"]')
+    ?.setAttribute("content", CFG.primary_color || "#126c5b");
+}
+
+// ── currentTenant shim (keep UI functions working unchanged) ───────
+function currentTenant() {
+  return {
+    name:                CFG.shop_name        || "My Shop",
+    address:             CFG.shop_address     || "",
+    phone:               CFG.shop_phone       || "",
+    whatsapp:            CFG.shop_phone       || "",
+    primaryColor:        CFG.primary_color    || "#126c5b",
+    secondaryColor:      CFG.secondary_color  || "#e9b949",
+    currency:            CFG.currency         || "Rs.",
+    taxRate:             Number(CFG.tax_rate  || 0),
+    receiptFooter:       CFG.terms_text       || "",
+    repairModuleEnabled: true,
+    logo:                CFG.shop_logo        || "",
+    businessDescription: CFG.shop_description || "",
+    plan:                "Premium",
+    status:              "Active",
+  };
+}
+
+// ── scoped() shim — no tenantId filtering needed anymore ──────────
+function scoped(store) {
+  // map old store names to new state.data keys
+  const map = { repairs:"tickets", products:[], customers:[] };
+  if (store === "repairs")   return state.data.tickets   || [];
+  if (store === "sales")     return state.data.sales     || [];
+  if (store === "employees") return state.data.employees || [];
+  if (store === "udhar")     return state.data.udhar     || [];
+  if (store === "returns")   return state.data.returns   || [];
+  // products/customers not in Supabase for this build — return empty
+  return [];
 }
 
 /* ── Role-based access ──────────────────────────────────────────── */
@@ -193,19 +152,403 @@ const ADMIN_MODULES = [
   ["settings","◐","Business Settings"],
 ];
 
+/* ═══════════════════════════════════════════════════════════════════
+   SUPABASE OPERATIONS
+═══════════════════════════════════════════════════════════════════ */
+
+// ── PIN verification (never loads pin_code on GET, only verifies) ──
+async function verifyPin(pin) {
+  // We do a direct match query — pin_code never comes to the client
+  const { data, error } = await sb
+    .from("employees")
+    .select("id, name, role, status")
+    .eq("pin_code", String(pin))
+    .eq("status", "Active")
+    .single();
+  if (error || !data) return { ok: false };
+  return { ok: true, employee: { id: data.id, name: data.name, role: data.role } };
+}
+
+async function verifyAdmin(pin) {
+  return String(pin) === String(CFG.admin_password)
+    ? { ok: true }
+    : { ok: false };
+}
+
+// ── Ticket number generator ────────────────────────────────────────
+function generateTicketNumber() {
+  const year = new Date().getFullYear();
+  const rand = String(Math.floor(1000 + Math.random() * 9000));
+  return `FP-${year}-${rand}`;
+}
+
+// ── Create repair ticket ───────────────────────────────────────────
+async function createTicket(payload) {
+  const ticket_number = generateTicketNumber();
+  const { data, error } = await sb.from("tickets").insert({
+    ticket_number,
+    customer_name:   payload.customerName   || "",
+    customer_phone:  payload.customerPhone  || "",
+    device_brand:    payload.deviceBrand    || "",
+    device_model:    payload.deviceModel    || "",
+    imei:            payload.imei           || "",
+    components_noted: payload.components   || [],
+    estimated_quote: Number(payload.estimatedQuote || 0),
+    advance_payment: Number(payload.advance        || 0),
+    advance_method:  payload.advanceMethod  || "",
+    status:          "Pending",
+    technician_note: payload.technicianNote || "",
+    created_by:      SESSION.employee?.name || "Counter",
+  }).select().single();
+
+  if (error) { console.error("createTicket:", error); return { ok: false, error: error.message }; }
+  return { ok: true, data };
+}
+
+// ── Update ticket (add components at checkout, status change, decline) ──
+async function updateTicket(id, updates) {
+  // remap JS camelCase keys to Supabase snake_case column names
+  const mapped = {};
+  if (updates.components    !== undefined) mapped.components_noted = updates.components;
+  if (updates.status        !== undefined) mapped.status            = updates.status;
+  if (updates.declineReason !== undefined) mapped.decline_reason    = updates.declineReason;
+  if (updates.technicianNote!== undefined) mapped.technician_note   = updates.technicianNote;
+  if (updates.settledAt     !== undefined) mapped.settled_at        = updates.settledAt;
+
+  const { error } = await sb.from("tickets").update(mapped).eq("id", id);
+  if (error) { console.error("updateTicket:", error); return { ok: false, error: error.message }; }
+  return { ok: true };
+}
+
+// ── Employee login screen HTML ─────────────────────────────────────
+function loginScreen() {
+  return `
+    <div style="min-height:100vh;display:grid;place-items:center;background:var(--bg)">
+      <div class="card" style="width:min(380px,90vw);display:grid;gap:18px;padding:28px">
+        <div style="text-align:center">
+          <div class="logo" style="margin:0 auto 14px;width:56px;height:56px;font-size:18px">
+            ${CFG.shop_name?.slice(0,2).toUpperCase()||"FP"}
+          </div>
+          <h2>${CFG.shop_name||"RetailOS"}</h2>
+          <p class="muted">Enter your 4-digit PIN to continue</p>
+        </div>
+        <div id="pin-display"
+          style="text-align:center;font-size:34px;letter-spacing:20px;min-height:52px;
+                 border-bottom:2px solid var(--border);padding-bottom:8px">····</div>
+        <div id="pin-error" class="hidden"
+          style="color:var(--danger);text-align:center;font-size:13px">
+          Invalid PIN. Try again.
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
+          ${[1,2,3,4,5,6,7,8,9,"⌫",0,"→"].map(k=>`
+            <button class="secondary-button"
+              style="font-size:22px;min-height:58px;border-radius:8px"
+              data-pin-key="${k}">${k}</button>`).join("")}
+        </div>
+        <button class="secondary-button" data-action="skip-login"
+          style="font-size:13px;color:var(--muted)">
+          Continue without login
+        </button>
+      </div>
+    </div>`;
+}
+
+let pinBuffer = "";
+
+function handlePinKey(key) {
+  const display = document.getElementById("pin-display");
+  const errEl   = document.getElementById("pin-error");
+  if (!display) return;
+  if (key === "⌫") {
+    pinBuffer = pinBuffer.slice(0, -1);
+  } else if (key === "→") {
+    submitPin(); return;
+  } else {
+    if (pinBuffer.length >= 4) return;
+    pinBuffer += String(key);
+  }
+  display.textContent = "●".repeat(pinBuffer.length).padEnd(4, "·");
+  if (errEl) errEl.classList.add("hidden");
+  if (pinBuffer.length === 4) submitPin();
+}
+
+async function submitPin() {
+  const res = await verifyPin(pinBuffer);
+  pinBuffer  = "";
+  if (res.ok) {
+    SESSION.employee    = res.employee;
+    SESSION.loginSkipped = false;
+    render();
+  } else {
+    const errEl   = document.getElementById("pin-error");
+    const display = document.getElementById("pin-display");
+    if (errEl)   errEl.classList.remove("hidden");
+    if (display) display.textContent = "····";
+  }
+}
+
+// ── PIN prompt modal (discount / checkout / admin / settle / return) ──
+let ppBuffer   = "";
+let ppPurpose  = "";
+let ppCallback = null;
+
+function openPinPrompt(purpose, callback) {
+  ppBuffer   = "";
+  ppPurpose  = purpose;
+  ppCallback = callback;
+  state.modal = { type: "pinPrompt", purpose };
+  render();
+}
+
+function pinPromptHTML(purpose) {
+  const label = {
+    admin:    "Admin password required",
+    settle:   "Admin PIN to settle credit",
+    return:   "Admin PIN to process return",
+    checkout: "Enter your employee PIN",
+    discount: "PIN required to apply discount",
+  }[purpose] || "Verify identity";
+  return `
+    <div class="modal" style="max-width:340px">
+      <h2>${label}</h2>
+      <div id="pp-display"
+        style="text-align:center;font-size:30px;letter-spacing:16px;min-height:48px;
+               border-bottom:2px solid var(--border);padding-bottom:8px;margin:10px 0">····</div>
+      <div id="pp-error" class="hidden"
+        style="color:var(--danger);text-align:center;font-size:13px;margin-bottom:8px">
+        Wrong PIN.
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+        ${[1,2,3,4,5,6,7,8,9,"⌫",0,"✓"].map(k=>`
+          <button class="secondary-button"
+            style="font-size:20px;min-height:50px"
+            data-pp-key="${k}">${k}</button>`).join("")}
+      </div>
+      <div class="modal-actions" style="margin-top:10px">
+        <button class="secondary-button" data-close>Cancel</button>
+      </div>
+    </div>`;
+}
+
+function handlePpKey(key) {
+  const display = document.getElementById("pp-display");
+  const errEl   = document.getElementById("pp-error");
+  if (!display) return;
+  if (key === "⌫") {
+    ppBuffer = ppBuffer.slice(0, -1);
+  } else if (key === "✓") {
+    submitPp(); return;
+  } else {
+    if (ppBuffer.length >= 4) return;
+    ppBuffer += String(key);
+  }
+  display.textContent = "●".repeat(ppBuffer.length).padEnd(4, "·");
+  if (errEl) errEl.classList.add("hidden");
+  if (ppBuffer.length === 4) submitPp();
+}
+
+async function submitPp() {
+  const pin = ppBuffer;
+  ppBuffer  = "";
+  let res;
+  if (["admin","settle","return"].includes(ppPurpose)) {
+    res = await verifyAdmin(pin);
+    if (res.ok) { state.modal = null; ppCallback && ppCallback(pin, null); }
+  } else {
+    res = await verifyPin(pin);
+    if (res.ok) { state.modal = null; ppCallback && ppCallback(pin, res.employee); }
+  }
+  if (!res.ok) {
+    const errEl   = document.getElementById("pp-error");
+    const display = document.getElementById("pp-display");
+    if (errEl)   errEl.classList.remove("hidden");
+    if (display) display.textContent = "····";
+  }
+}
+
 /* ── Print helper ───────────────────────────────────────────────── */
-function printContent(html) {
-  const zone = document.getElementById("print-zone");
-  zone.innerHTML = html;
-  window.print();
-  // restore after browser finishes print dialog
-  setTimeout(()=>{ zone.innerHTML=""; },1500);
+function printThermal(contentHtml) {
+  const old = document.getElementById("thermal-frame");
+  if (old) old.remove();
+  const iframe = document.createElement("iframe");
+  iframe.id    = "thermal-frame";
+  Object.assign(iframe.style, {
+    position:"fixed", top:"-9999px", left:"-9999px",
+    width:"80mm", height:"1px", border:"none",
+  });
+  document.body.appendChild(iframe);
+  const doc = iframe.contentDocument || iframe.contentWindow.document;
+  doc.open();
+  doc.write(`<!DOCTYPE html><html><head><meta charset="UTF-8">
+    <style>
+      *    { box-sizing:border-box; margin:0; padding:0; }
+      body { font-family:'Courier New',Courier,monospace; font-size:12px;
+             color:#000; background:#fff; width:80mm; padding:4mm; line-height:1.6; }
+      .c   { text-align:center; }
+      .b   { font-weight:bold; }
+      .r   { text-align:right; }
+      .lg  { font-size:15px; font-weight:bold; }
+      .sm  { font-size:10px; color:#555; }
+      .row { display:flex; justify-content:space-between; }
+      .ln  { border-top:1px dashed #000; margin:5px 0; }
+      .bw  { text-align:center; margin:6px 0; }
+      @page { margin:0; size:80mm auto; }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
+  </head><body>
+    ${contentHtml}
+    <script>
+      window.addEventListener('load', function() {
+        if (typeof JsBarcode !== 'undefined') {
+          document.querySelectorAll('.bc').forEach(function(el) {
+            try {
+              JsBarcode(el, el.dataset.val,
+                { format:'CODE128', width:1.4, height:38, displayValue:false });
+            } catch(e) {}
+          });
+        }
+        setTimeout(function(){ window.print(); }, 400);
+      });
+    <\/script>
+  </body></html>`);
+  doc.close();
+}
+
+function buildTicketSlip(ticket) {
+  const comps = ticket.components_noted || [];
+  return `
+    <div class="c b lg">${CFG.shop_name || "Repair Shop"}</div>
+    <div class="c sm">${CFG.shop_address || ""}</div>
+    <div class="c sm">${CFG.shop_phone   || ""}</div>
+    <div class="ln"></div>
+    <div class="c b">REPAIR TICKET</div>
+    <div class="c lg">${ticket.ticket_number}</div>
+    <div class="bw"><svg class="bc" data-val="${ticket.ticket_number}"></svg></div>
+    <div class="ln"></div>
+    <div class="row"><span>Customer</span><span>${ticket.customer_name}</span></div>
+    <div class="row"><span>Phone</span><span>${ticket.customer_phone}</span></div>
+    <div class="row"><span>Device</span>
+      <span>${ticket.device_brand} ${ticket.device_model}</span></div>
+    ${ticket.imei
+      ? `<div class="row"><span>IMEI</span><span class="sm">${ticket.imei}</span></div>`
+      : ""}
+    <div class="row"><span>Date</span>
+      <span>${new Date(ticket.created_at).toLocaleDateString()}</span></div>
+    <div class="ln"></div>
+    <div class="b">Issues Noted:</div>
+    ${comps.length
+      ? comps.map(c =>
+          `<div class="row">
+            <span>· ${c.name}</span>
+            <span class="sm">${c.condition || ""}</span>
+          </div>`).join("")
+      : `<div class="sm">No components noted yet.</div>`}
+    <div class="ln"></div>
+    <div class="row">
+      <span>Estimated Quote</span>
+      <span>${money(ticket.estimated_quote, CFG.currency)}</span>
+    </div>
+    ${Number(ticket.advance_payment) > 0 ? `
+    <div class="row">
+      <span>Advance Paid</span>
+      <span>${money(ticket.advance_payment, CFG.currency)}
+        (${ticket.advance_method})</span>
+    </div>` : ""}
+    <div class="ln"></div>
+    ${ticket.technician_note
+      ? `<div class="sm">Note: ${ticket.technician_note}</div><div class="ln"></div>`
+      : ""}
+    ${CFG.terms_text
+      ? `<div class="c sm">${CFG.terms_text}</div><div class="ln"></div>`
+      : ""}
+    <div class="c sm">Thank you for your trust.</div>`;
+}
+
+function buildReceiptSlip(sale) {
+  const items = sale.items || [];
+  return `
+    <div class="c b lg">${CFG.shop_name || "Retail Shop"}</div>
+    <div class="c sm">${CFG.shop_address || ""}</div>
+    <div class="c sm">${CFG.shop_phone   || ""}</div>
+    <div class="ln"></div>
+    <div class="c b">RECEIPT</div>
+    <div class="c">${sale.receiptNo}</div>
+    <div class="bw"><svg class="bc" data-val="${sale.receiptNo}"></svg></div>
+    <div class="ln"></div>
+    <div class="row"><span>Date</span>
+      <span>${new Date(sale.date || sale.created_at || Date.now())
+        .toLocaleDateString()}</span></div>
+    ${sale.customer
+      ? `<div class="row"><span>Customer</span><span>${sale.customer}</span></div>`
+      : ""}
+    ${sale.cashier
+      ? `<div class="row"><span>Cashier</span><span>${sale.cashier}</span></div>`
+      : ""}
+    <div class="ln"></div>
+    ${items.map(i => `
+      <div class="row">
+        <span>${i.name}</span>
+        <span>${money(i.soldPrice * i.qty, CFG.currency)}</span>
+      </div>
+      <div class="sm row">
+        <span>  ${i.qty} × ${money(i.soldPrice, CFG.currency)}
+          ${i.discount > 0 ? ` (disc ${money(i.discount, CFG.currency)})` : ""}
+        </span>
+      </div>`).join("")}
+    <div class="ln"></div>
+    ${Number(sale.discount) > 0
+      ? `<div class="row"><span>Discount</span>
+           <span>${money(sale.discount, CFG.currency)}</span></div>` : ""}
+    ${Number(sale.labour) > 0
+      ? `<div class="row"><span>Labour</span>
+           <span>${money(sale.labour, CFG.currency)}</span></div>` : ""}
+    ${Number(sale.tax) > 0
+      ? `<div class="row"><span>Tax</span>
+           <span>${money(sale.tax, CFG.currency)}</span></div>` : ""}
+    <div class="row b lg">
+      <span>TOTAL</span>
+      <span>${money(sale.total, CFG.currency)}</span>
+    </div>
+    <div class="row"><span>Payment</span><span>${sale.payment}</span></div>
+    <div class="ln"></div>
+    <div class="c sm">${CFG.terms_text || "Thank you for your business."}</div>`;
+}
+
+function buildReturnSlip(data) {
+  return `
+    <div class="c b lg">${CFG.shop_name || "Retail Shop"}</div>
+    <div class="c sm">${CFG.shop_address || ""}</div>
+    <div class="ln"></div>
+    <div class="c b">RETURN / REFUND</div>
+    <div class="ln"></div>
+    <div class="row"><span>Original Invoice</span><span>INV-${data.saleId}</span></div>
+    <div class="row"><span>Date</span>
+      <span>${new Date().toLocaleDateString()}</span></div>
+    <div class="ln"></div>
+    ${data.items.map(i =>
+      `<div class="row">
+        <span>${i.name} × ${i.qty}</span>
+        <span>${money(i.sold_price * i.qty, CFG.currency)}</span>
+      </div>`).join("")}
+    <div class="ln"></div>
+    <div class="row b lg">
+      <span>REFUND</span>
+      <span>${money(data.refund, CFG.currency)}</span>
+    </div>
+    <div class="row"><span>Method</span><span>${data.method}</span></div>
+    <div class="ln"></div>
+    <div class="c sm">Please retain this slip for your records.</div>`;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
    RENDER
 ═══════════════════════════════════════════════════════════════════ */
 function render() {
+  // Login gate
+  if (CFG.strict_login_mode && !SESSION.employee && !SESSION.loginSkipped) {
+    document.getElementById("app").innerHTML = loginScreen();
+    return;
+  }
   const active = document.activeElement;
   const focusInfo = active?.dataset?.filter ? { filter:active.dataset.filter, start:active.selectionStart, end:active.selectionEnd } : null;
   const app    = document.getElementById("app");
@@ -351,7 +694,12 @@ function pos() {
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="secondary-button" data-action="shift-stats">📋 Shift Stats</button>
-        ${tenant.repairModuleEnabled?`<button class="primary-button" data-modal="repair">+ New Repair Ticket</button>`:""}
+        ${tenant.repairModuleEnabled ? `
+  <button class="primary-button" data-modal="repair">+ New Repair Ticket</button>
+  <button class="secondary-button" data-action="add-ticket-to-cart">Collect Repair</button>
+` : ""}
+<button class="secondary-button" data-action="open-return">Return / Refund</button>
+<button class="secondary-button" data-action="open-udhar">Outstanding Credits</button>
       </div>
     </div>
     <div class="grid pos-layout">
@@ -385,7 +733,21 @@ function pos() {
           <div class="total-row"><span>Tax ${tenant.taxRate}%</span><strong>${money(tax,tenant.currency)}</strong></div>
           <div class="total-row grand"><span>Total</span><strong>${money(subtotal+tax,tenant.currency)}</strong></div>
         </div>
-        <select class="tenant-switcher" data-action="payment"><option>Cash</option><option>Card</option><option>Bank Transfer</option><option>Mixed Payment</option></select>
+        <select class="tenant-switcher" data-action="payment">
+  <option>Cash</option>
+  <option>Raast</option>
+  <option>JazzCash</option>
+  <option>EasyPaisa</option>
+  <option>Bank Transfer</option>
+  <option>Udhar (Credit)</option>
+</select>
+${state.checkoutPayment === "Udhar (Credit)" ? `
+  <div style="display:grid;gap:8px">
+    <input class="search" placeholder="Customer name *"
+      data-udhar="name" value="${state.udharName || ""}">
+    <input class="search" placeholder="Customer phone *"
+      data-udhar="phone" value="${state.udharPhone || ""}">
+  </div>` : ""}
         <button class="primary-button" data-action="checkout" ${state.cart.length?"":"disabled"}>Checkout & Receipt</button>
       </aside>
     </div>`;
@@ -534,25 +896,369 @@ function subscriptions() {
 function modal() {
   if (!state.modal) return "";
   const { type, id } = state.modal;
-  const product  = scoped("products").find(p=>p.id===id)||{};
-  const repair   = scoped("repairs").find(r=>r.id===id);
-  const cartItem = state.cart.find(i=>i.productId===id);
+  const cartItem = state.cart.find(i => i.productId === id);
   const tenant   = currentTenant();
 
+  // Ticket lookup for checkout modal
+  const ticket = (state.data.tickets || []).find(t => String(t.id) === String(id));
+
   const forms = {
-    product: `<form class="modal" data-form="product"><h2>${id?"Edit":"Add"} Product</h2><div class="form-grid">${fld("Name","name",product.name||"")}${fld("SKU","sku",product.sku||"")}${fld("Barcode","barcode",product.barcode||"")}${fld("Category","category",product.category||"")}${fld("Brand","brand",product.brand||"")}${fld("Cost Price","cost",product.cost||"","number")}${fld("Selling Price","price",product.price||"","number")}${fld("Quantity","qty",product.qty||"","number")}${fld("Min Stock","min",product.min||"","number")}<label class="field"><span>Image</span><input name="image" type="file" accept="image/*"></label><label class="field"><span>Description</span><textarea name="description">${product.description||""}</textarea></label></div>${modalActions()}</form>`,
-    customer: `<form class="modal" data-form="customer"><h2>Add Customer</h2><div class="form-grid">${fld("Name","name")}${fld("Phone","phone")}${fld("Email","email")}${fld("Address","address")}<label class="field"><span>Notes</span><textarea name="notes"></textarea></label></div>${modalActions()}</form>`,
-    employee: `<form class="modal" data-form="employee"><h2>Add Employee</h2><div class="form-grid">${fld("Name","name")}${fld("Phone","phone")}${fld("Email","email")}<label class="field"><span>Role</span><select name="role"><option>Manager</option><option>Cashier</option><option>Technician</option><option>Inventory Staff</option></select></label></div>${modalActions()}</form>`,
-    repair:   `<form class="modal" data-form="repair"><h2>New Repair Ticket</h2><div class="form-grid">${fld("Customer Name","customer")}${fld("Customer Phone","phone")}${fld("Device Brand","brand")}${fld("Device Model","model")}${fld("IMEI","imei")}${fld("Serial Number","serial")}${fld("Assigned Technician","technician","Ali Imran")}${fld("Estimated Completion","eta",new Date().toISOString().slice(0,10),"date")}<label class="field"><span>Status</span><select name="status"><option>Received</option><option>Diagnosing</option><option>Waiting for Parts</option><option>In Progress</option><option>Ready for Pickup</option><option>Delivered</option><option>Cancelled</option></select></label><label class="field"><span>Issue Description</span><textarea name="issue"></textarea></label></div>${modalActions()}</form>`,
-    override: `<form class="modal" data-form="override"><h2>Price Override</h2><p class="muted">Original: ${money(cartItem?.originalPrice||0,tenant.currency)}</p>${fld("Sold Price","soldPrice",cartItem?.soldPrice||0,"number")}<label class="field"><span>Reason for Discount</span><textarea name="reason">${cartItem?.reason||""}</textarea></label>${modalActions()}</form>`,
-    stock:    `<form class="modal" data-form="stock"><h2>Stock Adjustment</h2><div class="form-grid">${fld("SKU","sku")}${fld("Quantity Change","qty",1,"number")}<label class="field"><span>Reason</span><select name="reason"><option>Manual Count</option><option>Damaged Inventory</option><option>Returned Inventory</option></select></label></div>${modalActions()}</form>`,
-    purchase: `<form class="modal" data-form="purchase"><h2>Purchase Order</h2><div class="form-grid">${fld("Supplier","supplier")}${fld("Product","product")}${fld("Quantity","qty",10,"number")}${fld("Expected Date","eta",new Date().toISOString().slice(0,10),"date")}</div>${modalActions()}</form>`,
-    receipt:  `<div class="modal"><h2>Receipt</h2>${receiptPreview(state.modal.sale)}<div class="modal-actions"><button class="secondary-button" data-close>Close</button><button class="primary-button" data-action="print-receipt">Print Receipt</button></div></div>`,
-    shiftStats:`<div class="modal" style="max-width:480px"><h2>Shift Stats</h2><div class="shift-print-wrap">${buildShiftStats()}</div><div class="modal-actions"><button class="secondary-button" data-close>Close</button><button class="primary-button" data-action="print-shift">Print Summary</button></div></div>`,
-    repairView:`<div class="modal"><h2>${repair?.ticket}</h2><p class="muted">${repair?.customer} · ${repair?.brand} ${repair?.model} · ${repair?.status}</p><div class="timeline">${(repair?.timeline||[]).map(step=>`<div class="timeline-step"><div><strong>${step}</strong></div></div>`).join("")}</div><div class="modal-actions"><button class="secondary-button" data-close>Close</button></div></div>`,
+
+    // ── Repair ticket creation ──────────────────────────────────────
+    repair: (() => {
+      const comps = CFG.quick_components || [];
+      const tags  = ["Repaired","Replaced","New","Cleaned","Checked"];
+      const sel   = state.modal?.selectedComponents || [];
+      return `
+        <form class="modal" data-form="repair" style="max-width:680px">
+          <h2>New Repair Ticket</h2>
+          <div class="form-grid">
+            ${fld("Customer Name","customerName")}
+            ${fld("Customer Phone","customerPhone","","tel")}
+            ${fld("Device Brand","deviceBrand")}
+            ${fld("Device Model","deviceModel")}
+            ${fld("IMEI / Serial","imei")}
+            ${fld("Estimated Quote","estimatedQuote","0","number")}
+            ${fld("Advance Received","advance","0","number")}
+            <label class="field"><span>Advance Method</span>
+              <select name="advanceMethod">
+                <option value="">None</option>
+                <option>Cash</option><option>Raast</option>
+                <option>JazzCash</option><option>EasyPaisa</option>
+                <option>Bank Transfer</option>
+              </select>
+            </label>
+            <label class="field" style="grid-column:1/-1">
+              <span>Technician Note</span>
+              <textarea name="technicianNote" style="min-height:56px"></textarea>
+            </label>
+          </div>
+          <p class="muted" style="font-size:13px;margin:8px 0 6px">Tap to add issues:</p>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+            ${comps.map(c => {
+              const active = sel.find(s => s.name === c);
+              return `<button type="button"
+                class="${active ? "primary-button" : "secondary-button"}"
+                style="font-size:13px;padding:6px 14px"
+                data-comp="${c}">${c}${active ? " ✓" : ""}</button>`;
+            }).join("")}
+          </div>
+          ${sel.length ? `<div style="display:grid;gap:6px;margin-bottom:10px">
+            ${sel.map((s, i) => `
+              <div style="display:flex;align-items:center;gap:8px;padding:8px;
+                          background:var(--surface-2);border-radius:8px">
+                <strong style="flex:1">${s.name}</strong>
+                <select data-comp-tag="${i}"
+                  style="border:1px solid var(--border);border-radius:6px;
+                         padding:5px 8px;background:var(--surface);color:var(--text)">
+                  ${tags.map(t => `<option ${t === s.tag ? "selected" : ""}>${t}</option>`).join("")}
+                </select>
+                <button type="button" data-remove-comp="${i}"
+                  style="color:var(--danger);background:none;border:none;
+                         font-size:20px;line-height:1;padding:0 4px">×</button>
+              </div>`).join("")}
+          </div>` : ""}
+          ${modalActions()}
+        </form>`;
+    })(),
+
+    // ── Ticket checkout — fill prices + add components ──────────────
+    ticketCheckout: (() => {
+      if (!ticket) return `<div class="modal"><p class="muted">Ticket not found.</p>
+        <div class="modal-actions"><button class="secondary-button" data-close>Close</button></div></div>`;
+      const comps   = ticket.components_noted || [];
+      const advance = Number(ticket.advance_payment || 0);
+      return `
+        <div class="modal" style="max-width:640px">
+          <h2>Checkout — ${ticket.ticket_number}</h2>
+          <p class="muted">${ticket.customer_name} · ${ticket.device_brand} ${ticket.device_model}</p>
+          ${advance > 0 ? `
+            <div style="background:color-mix(in srgb,var(--warning) 12%,var(--surface));
+                        border:1px solid color-mix(in srgb,var(--warning) 30%,var(--border));
+                        border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:8px">
+              Advance paid: ${money(advance, tenant.currency)}
+              (${ticket.advance_method}) — deducted from total.
+            </div>` : ""}
+          <div style="display:grid;gap:6px;margin-bottom:10px" id="tc-list">
+            ${comps.map((c, i) => `
+              <div style="display:flex;align-items:center;gap:8px;padding:9px;
+                          background:var(--surface-2);border-radius:8px">
+                <span style="flex:1">
+                  <strong>${c.name}</strong>
+                  <span class="badge warn" style="margin-left:6px">${c.condition || ""}</span>
+                </span>
+                <input type="number" placeholder="Price" value="${c.price || ""}"
+                  data-tc-price="${i}" min="0"
+                  style="width:110px;border:1px solid var(--border);border-radius:6px;
+                         padding:7px 9px;background:var(--surface);color:var(--text)">
+                <button type="button" data-tc-remove="${i}"
+                  style="color:var(--danger);background:none;border:none;
+                         font-size:20px;line-height:1;padding:0 4px">×</button>
+              </div>`).join("")}
+          </div>
+          <button type="button" class="secondary-button" data-tc-add
+            style="font-size:13px;margin-bottom:12px">+ Add Component</button>
+          <div style="border-top:1px solid var(--border);padding-top:10px;
+                      display:flex;align-items:center;gap:10px">
+            <label style="flex:1;font-size:14px">Labour / Technician Cost</label>
+            <input type="number" id="tc-labour" value="${state.cartLabour || 0}" min="0"
+              style="width:120px;border:1px solid var(--border);border-radius:6px;
+                     padding:7px 9px;background:var(--surface);color:var(--text)">
+          </div>
+          ${advance > 0 ? `
+            <div style="display:flex;justify-content:space-between;
+                        padding-top:8px;color:var(--success)">
+              <span>Advance Deduction</span>
+              <strong>− ${money(advance, tenant.currency)}</strong>
+            </div>` : ""}
+          <div style="display:flex;justify-content:space-between;padding-top:8px;
+                      font-size:20px;font-weight:800">
+            <span>Total Payable</span>
+            <strong id="tc-total">${money(0, tenant.currency)}</strong>
+          </div>
+          <div class="modal-actions" style="margin-top:12px">
+            <button class="secondary-button" data-close>Cancel</button>
+            <button class="danger-button" data-tc-decline>Declined by Customer</button>
+            <button class="primary-button" data-tc-confirm>Add to Cart</button>
+          </div>
+        </div>
+        <script>
+          (function(){
+            function recalc(){
+              const prices = [...document.querySelectorAll('[data-tc-price]')]
+                .map(i => Number(i.value) || 0);
+              const labour  = Number(document.getElementById('tc-labour')?.value || 0);
+              const advance = ${advance};
+              const total   = prices.reduce((s,p) => s+p, 0) + labour - advance;
+              const el      = document.getElementById('tc-total');
+              if (el) el.textContent = 'Rs. ' + Math.max(0, total).toLocaleString();
+            }
+            document.addEventListener('input', e => {
+              if (e.target.dataset.tcPrice !== undefined ||
+                  e.target.id === 'tc-labour') recalc();
+            });
+            recalc();
+          })();
+        <\/script>`;
+    })(),
+
+    // ── Price override ──────────────────────────────────────────────
+    override: `
+      <form class="modal" data-form="override">
+        <h2>Price Override</h2>
+        <p class="muted">Original: ${money(cartItem?.originalPrice || 0, tenant.currency)}</p>
+        ${fld("Sold Price","soldPrice", cartItem?.soldPrice || 0, "number")}
+        <label class="field"><span>Reason for Discount</span>
+          <textarea name="reason">${cartItem?.reason || ""}</textarea>
+        </label>
+        ${modalActions()}
+      </form>`,
+
+    // ── Udhar customer info ─────────────────────────────────────────
+    udharInfo: `
+      <form class="modal" data-form="udharInfo" style="max-width:420px">
+        <h2>Credit Sale — Customer Details</h2>
+        <p class="muted">Enter customer info before completing the sale.</p>
+        <div class="form-grid">
+          ${fld("Customer Name","udharName")}
+          ${fld("Customer Phone","udharPhone","","tel")}
+        </div>
+        ${modalActions()}
+      </form>`,
+
+    // ── Outstanding credits (Udhar list) ────────────────────────────
+    udharList: (() => {
+      const outstanding = (state.data.udhar || [])
+        .filter(u => u.status !== "Settled");
+      return `
+        <div class="modal" style="max-width:640px">
+          <h2>Outstanding Credits</h2>
+          ${outstanding.length === 0
+            ? `<div class="empty">No outstanding credits.</div>`
+            : `<div style="display:grid;gap:10px">
+              ${outstanding.map(u => `
+                <div style="padding:12px;background:var(--surface-2);
+                            border-radius:8px;display:grid;gap:8px">
+                  <div style="display:flex;justify-content:space-between;
+                              align-items:flex-start">
+                    <div>
+                      <strong>${u.customer_name}</strong> · ${u.customer_phone}<br>
+                      <small class="muted">INV-${u.sale_id} ·
+                        ${new Date(u.created_at).toLocaleDateString()}</small>
+                    </div>
+                    <span class="badge ${u.status === "Settled" ? "good" : "bad"}">
+                      ${u.status}
+                    </span>
+                  </div>
+                  <div style="display:flex;justify-content:space-between">
+                    <span>Balance: <strong>${money(u.balance_due, tenant.currency)}</strong></span>
+                    <span class="muted">Total: ${money(u.total_amount, tenant.currency)}</span>
+                  </div>
+                  <div style="display:flex;gap:8px;align-items:center">
+                    <input type="number" placeholder="Amount to settle"
+                      data-settle-amount="${u.id}" min="1"
+                      style="flex:1;border:1px solid var(--border);border-radius:6px;
+                             padding:7px 9px;background:var(--surface);color:var(--text)">
+                    <select data-settle-method="${u.id}"
+                      style="border:1px solid var(--border);border-radius:6px;
+                             padding:7px 9px;background:var(--surface);color:var(--text)">
+                      <option>Cash</option><option>Raast</option>
+                      <option>JazzCash</option><option>EasyPaisa</option>
+                      <option>Bank Transfer</option>
+                    </select>
+                    <button class="primary-button" data-settle-id="${u.id}">Settle</button>
+                  </div>
+                </div>`).join("")}
+            </div>`}
+          <div class="modal-actions">
+            <button class="secondary-button" data-close>Close</button>
+          </div>
+        </div>`;
+    })(),
+
+    // ── Return flow ─────────────────────────────────────────────────
+    returnFlow: (() => {
+      const receiptInput = state.modal?.receiptNo || "";
+      const saleId       = receiptInput.replace("INV-","");
+      const sale         = (state.data.sales || [])
+        .find(s => String(s.id) === String(saleId));
+
+      if (!sale) return `
+        <form class="modal" data-form="return-lookup" style="max-width:440px">
+          <h2>Process Return</h2>
+          <p class="muted">Enter the invoice number from the original receipt.</p>
+          ${fld("Invoice No. (e.g. INV-42)","receiptNo", receiptInput)}
+          ${state.modal?.notFound
+            ? `<p style="color:var(--danger);font-size:13px">Invoice not found.</p>`
+            : ""}
+          <div class="modal-actions">
+            <button class="secondary-button" data-close>Cancel</button>
+            <button class="primary-button">Look Up</button>
+          </div>
+        </form>`;
+
+      const items = sale.items_sold || [];
+      return `
+        <form class="modal" data-form="return-confirm" style="max-width:560px">
+          <h2>Return — INV-${sale.id}</h2>
+          <p class="muted">${sale.customer_name || "Walk-in"} ·
+            ${new Date(sale.created_at).toLocaleDateString()}</p>
+          <div style="display:grid;gap:8px;margin:10px 0">
+            ${items.map((item, i) => `
+              <label style="display:flex;align-items:center;gap:10px;padding:10px;
+                            background:var(--surface-2);border-radius:8px">
+                <input type="checkbox" name="ret_${i}" value="${i}" checked>
+                <span style="flex:1">${item.name} × ${item.qty}</span>
+                <strong>${money(item.sold_price * item.qty, tenant.currency)}</strong>
+              </label>`).join("")}
+          </div>
+          <label class="field"><span>Refund Method</span>
+            <select name="refundMethod">
+              <option>Cash</option><option>Raast</option>
+              <option>JazzCash</option><option>EasyPaisa</option>
+              <option>Bank Transfer</option>
+            </select>
+          </label>
+          <label class="field"><span>Notes</span>
+            <textarea name="notes"></textarea>
+          </label>
+          <input type="hidden" name="saleId" value="${sale.id}">
+          <div class="modal-actions">
+            <button class="secondary-button" data-close>Cancel</button>
+            <button class="primary-button">Process Return</button>
+          </div>
+        </form>`;
+    })(),
+
+    // ── Receipt ─────────────────────────────────────────────────────
+    receipt: `
+      <div class="modal">
+        <h2>Receipt</h2>
+        ${receiptPreview(state.modal?.sale)}
+        <div class="modal-actions">
+          <button class="secondary-button" data-close>Close</button>
+          <button class="primary-button" data-action="print-receipt">Print / Save PDF</button>
+        </div>
+      </div>`,
+
+    // ── Shift stats ─────────────────────────────────────────────────
+    shiftStats: `
+      <div class="modal" style="max-width:480px">
+        <h2>Shift Stats</h2>
+        <div class="shift-print-wrap">${buildShiftStats()}</div>
+        <div class="modal-actions">
+          <button class="secondary-button" data-close>Close</button>
+          <button class="primary-button" data-action="print-shift">Print / Save PDF</button>
+        </div>
+      </div>`,
+
+    // ── Employee add/edit ───────────────────────────────────────────
+    employee: `
+      <form class="modal" data-form="employee" style="max-width:440px">
+        <h2>Add Employee</h2>
+        <p class="muted" style="font-size:13px">Admin PIN will be required to save.</p>
+        <div class="form-grid">
+          ${fld("Full Name","name")}
+          ${fld("4-digit PIN","pin_code","","number")}
+          <label class="field"><span>Role</span>
+            <select name="role">
+              <option>Cashier</option>
+              <option>Technician</option>
+              <option>Admin</option>
+            </select>
+          </label>
+        </div>
+        ${modalActions()}
+      </form>`,
+
+    // ── PIN prompt ──────────────────────────────────────────────────
+    pinPrompt: pinPromptHTML(state.modal?.purpose),
+
   };
-  return `<div class="modal-backdrop">${forms[type]||""}</div>`;
+
+  return `<div class="modal-backdrop">${forms[type] || ""}</div>`;
 }
+
+// ── Settle Udhar ───────────────────────────────────────────────────
+async function settleUdhar(udharId, amount, method) {
+  const rec = state.data.udhar.find(u => u.id === udharId);
+  if (!rec) return;
+  const history  = rec.payment_history || [];
+  history.push({ date: new Date().toISOString().slice(0,10), paid: amount, method });
+  const newPaid    = Number(rec.amount_paid) + Number(amount);
+  const newBalance = Math.max(0, Number(rec.total_amount) - newPaid);
+  const newStatus  = newBalance <= 0 ? "Settled" : "Partial";
+  const { error } = await sb.from("udhar").update({
+    amount_paid:     newPaid,
+    balance_due:     newBalance,
+    payment_history: history,
+    status:          newStatus,
+    settled_at:      newBalance <= 0 ? new Date().toISOString() : null,
+  }).eq("id", udharId);
+  if (error) { alert("Settle error: " + error.message); return; }
+  await load();
+  state.modal = { type: "udharList" };
+  render();
+}
+
+// ── Process Return ─────────────────────────────────────────────────
+async function processReturn(saleId, returnedItems, refundAmount, method, notes) {
+  const { error } = await sb.from("returns").insert({
+    original_sale_id: saleId,
+    returned_items:   returnedItems,
+    refund_amount:    refundAmount,
+    processed_by:     SESSION.employee?.id || null,
+    notes,
+  });
+  if (error) { alert("Return error: " + error.message); return; }
+  printThermal(buildReturnSlip({
+    saleId, items: returnedItems, refund: refundAmount, method,
+  }));
+  state.modal = null;
+  await load();
+}
+
+
 
 function receiptPreview(sale) {
   const t = currentTenant();
@@ -585,107 +1291,476 @@ function updateQty(productId,delta) {
   state.cart = state.cart.filter(i=>i.qty>0);
   render();
 }
+/* ── Checkout ─────────────────────────────────────────────────────── */
 async function checkout() {
-  const t       = currentTenant();
-  const subtotal = state.cart.reduce((s,i)=>s+i.soldPrice*i.qty,0);
-  const tax      = subtotal*(t.taxRate/100);
-  const sale     = {
-    id: uid("sale"), tenantId:state.tenantId,
-    receiptNo:`R-${Math.floor(2000+Math.random()*7000)}`,
-    date: new Date().toISOString(),
-    cashier: scoped("employees").find(e=>e.role==="Cashier")?.name||"Demo Cashier",
-    customer:"Walk-in Customer",
-    items: state.cart.map(i=>({...i})),
-    subtotal, tax, total:subtotal+tax,
-    profit: state.cart.reduce((s,i)=>{ const p=scoped("products").find(x=>x.id===i.productId); return s+(i.soldPrice-(p?.cost||0))*i.qty; },0),
-    payment: document.querySelector('[data-action="payment"]')?.value||"Cash",
-    syncStatus:"Pending Sync",
-  };
-  await repo.put("sales",sale,true);
-  for (const item of state.cart) {
-    const p = scoped("products").find(x=>x.id===item.productId);
-    if (p) await repo.put("products",{...p,qty:Math.max(0,p.qty-item.qty)},true);
+  const hasDiscount = state.cart.some(i => i.discount > 0);
+
+  // Discount PIN gate
+  if (hasDiscount && CFG.discount_pin_required) {
+    openPinPrompt("discount", (pin, emp) => {
+      if (emp) SESSION.employee = emp;
+      doCheckout();
+    });
+    return;
   }
-  state.cart  = [];
-  state.modal = { type:"receipt", sale };
+  // Login-at-checkout gate
+  if (CFG.strict_login_mode && !SESSION.employee && !SESSION.loginSkipped) {
+    openPinPrompt("checkout", (pin, emp) => {
+      SESSION.employee = emp;
+      doCheckout();
+    });
+    return;
+  }
+  doCheckout();
+}
+
+async function doCheckout() {
+  const isUdhar  = state.checkoutPayment === "Udhar (Credit)";
+  const tenant   = currentTenant();
+  const subtotal = state.cart.reduce((s, i) => s + i.soldPrice * i.qty, 0);
+  const discount = state.cart.reduce((s, i) => s + (i.originalPrice - i.soldPrice) * i.qty, 0);
+  const labour   = state.cartLabour || 0;
+  const tax      = subtotal * (Number(CFG.tax_rate || 0) / 100);
+  const advance  = state.cartAdvance || 0;
+  const total    = subtotal + labour + tax - advance;
+
+  // Require udhar customer info before proceeding
+  if (isUdhar && (!state.udharName?.trim() || !state.udharPhone?.trim())) {
+    state.modal = { type: "udharInfo" };
+    render();
+    return;
+  }
+
+  const { data: saleData, error: saleErr } = await sb.from("sales").insert({
+    ticket_id:      state.cartTicketId || null,
+    customer_name:  state.udharName    || "",
+    items_sold:     state.cart.map(i => ({
+      name:          i.name,
+      qty:           i.qty,
+      original_price:i.originalPrice,
+      sold_price:    i.soldPrice,
+      discount:      i.discount,
+      reason:        i.reason || "",
+    })),
+    labour_cost:    labour,
+    discount:       discount,
+    tax:            tax,
+    total_bill:     Math.max(0, total),
+    payment_method: isUdhar ? "Udhar" : state.checkoutPayment,
+    employee_id:    SESSION.employee?.id   || null,
+    employee_name:  SESSION.employee?.name || "",
+  }).select().single();
+
+  if (saleErr) { alert("Sale error: " + saleErr.message); return; }
+
+  // If ticket was linked, mark it delivered
+  if (state.cartTicketId) {
+    await updateTicket(state.cartTicketId, {
+      status:    "Delivered",
+      settledAt: new Date().toISOString(),
+    });
+  }
+
+  // If udhar, create credit ledger row
+  if (isUdhar) {
+    await sb.from("udhar").insert({
+      sale_id:        saleData.id,
+      customer_name:  state.udharName,
+      customer_phone: state.udharPhone,
+      total_amount:   Math.max(0, total),
+      amount_paid:    0,
+      balance_due:    Math.max(0, total),
+      payment_history:[],
+      status:         "Outstanding",
+    });
+  }
+
+  // Build receipt object for the modal (uses same shape as before)
+  const sale = {
+    receiptNo:    `INV-${saleData.id}`,
+    date:         saleData.created_at,
+    cashier:      SESSION.employee?.name || "Counter",
+    customer:     state.udharName || "Walk-in",
+    items:        state.cart.map(i => ({...i})),
+    subtotal,
+    labour,
+    tax,
+    discount,
+    total:        Math.max(0, total),
+    payment:      isUdhar ? "Udhar" : state.checkoutPayment,
+  };
+
+  // Reset cart state
+  state.cart           = [];
+  state.cartTicketId   = null;
+  state.cartLabour     = 0;
+  state.cartAdvance    = 0;
+  state.udharName      = "";
+  state.udharPhone     = "";
+  state.checkoutPayment = "Cash";
+  state.modal          = { type: "receipt", sale };
+
   await load();
 }
 
 /* ═══════════════════════════════════════════════════════════════════
    EVENT DELEGATION
 ═══════════════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════════════
+   EVENT DELEGATION
+═══════════════════════════════════════════════════════════════════ */
 document.addEventListener("click", async event => {
-  const el = event.target.closest("button,[data-route],[data-add-cart],[data-category],[data-modal],[data-delete],[data-close],[data-settings-tab]");
+  const el = event.target.closest(
+    "button,[data-route],[data-add-cart],[data-category]," +
+    "[data-modal],[data-close],[data-settings-tab]," +
+    "[data-pin-key],[data-pp-key],[data-comp],[data-remove-comp]," +
+    "[data-tc-add],[data-tc-remove],[data-tc-decline],[data-tc-confirm]," +
+    "[data-settle-id],[data-action]"
+  );
   if (!el) return;
 
-  if (el.dataset.route)       { state.route=el.dataset.route; state.filter=""; render(); return; }
-  if (el.dataset.settingsTab) { state.settingsTab=el.dataset.settingsTab; render(); return; }
-  if (el.dataset.action==="theme")    { state.theme=state.theme==="dark"?"light":"dark"; localStorage.setItem("retailos-theme",state.theme); applyBranding(currentTenant()); render(); return; }
-  if (el.dataset.action==="install"&&state.installPrompt) { state.installPrompt.prompt(); state.installPrompt=null; render(); return; }
-  if (el.dataset.action==="new-sale") { state.route="pos"; render(); return; }
-  if (el.dataset.action==="bulk")     { alert("Bulk import wired as a service boundary for CSV/Firebase expansion."); return; }
-  if (el.dataset.category)            { state.category=el.dataset.category; render(); return; }
-  if (el.dataset.addCart)             { addToCart(el.dataset.addCart); return; }
-  if (el.dataset.qty)                 { updateQty(el.dataset.qty,Number(el.dataset.delta)); return; }
-  if (el.dataset.modal)               { state.modal={ type:el.dataset.modal, id:el.dataset.id }; render(); return; }
-  if (el.dataset.close!==undefined)   { state.modal=null; render(); return; }
-  if (el.dataset.delete)              { await repo.delete(el.dataset.delete,el.dataset.id); await load(); return; }
-  if (el.dataset.action==="checkout") { await checkout(); return; }
+  // ── Navigation ──────────────────────────────────────────────────
+  if (el.dataset.route) {
+    state.route = el.dataset.route; state.filter = ""; render(); return;
+  }
+  if (el.dataset.settingsTab) {
+    state.settingsTab = el.dataset.settingsTab; render(); return;
+  }
 
-  if (el.dataset.action==="shift-stats") {
-    state.modal = { type:"shiftStats" };
-    render();
+  // ── Theme ────────────────────────────────────────────────────────
+  if (el.dataset.action === "theme") {
+    state.theme = state.theme === "dark" ? "light" : "dark";
+    localStorage.setItem("retailos-theme", state.theme);
+    applyBranding(); render(); return;
+  }
+
+  // ── PWA install ──────────────────────────────────────────────────
+  if (el.dataset.action === "install" && state.installPrompt) {
+    state.installPrompt.prompt();
+    state.installPrompt = null; render(); return;
+  }
+
+  // ── Login screen PIN pad ─────────────────────────────────────────
+  if (el.dataset.pinKey !== undefined) {
+    handlePinKey(el.dataset.pinKey); return;
+  }
+  if (el.dataset.action === "skip-login") {
+    SESSION.loginSkipped = true; render(); return;
+  }
+
+  // ── PIN prompt pad ───────────────────────────────────────────────
+  if (el.dataset.ppKey !== undefined) {
+    handlePpKey(el.dataset.ppKey); return;
+  }
+
+  // ── Modal open / close ───────────────────────────────────────────
+  if (el.dataset.modal) {
+    state.modal = { type: el.dataset.modal, id: el.dataset.id };
+    render(); return;
+  }
+  if (el.dataset.close !== undefined) {
+    state.modal = null; render(); return;
+  }
+
+  // ── Cart ─────────────────────────────────────────────────────────
+  if (el.dataset.category) {
+    state.category = el.dataset.category; render(); return;
+  }
+  if (el.dataset.addCart) {
+    addToCart(el.dataset.addCart); return;
+  }
+  if (el.dataset.qty) {
+    updateQty(el.dataset.qty, Number(el.dataset.delta)); return;
+  }
+
+  // ── Checkout ─────────────────────────────────────────────────────
+  if (el.dataset.action === "checkout") {
+    await checkout(); return;
+  }
+
+  // ── Add ticket to cart by ID lookup ─────────────────────────────
+  if (el.dataset.action === "add-ticket-to-cart") {
+    const raw = prompt("Enter Ticket Number (e.g. FP-2026-1234):");
+    if (!raw) return;
+    const found = state.data.tickets.find(
+      t => t.ticket_number.toUpperCase() === raw.trim().toUpperCase()
+    );
+    if (!found) { alert("Ticket not found."); return; }
+    if (["Delivered","Declined"].includes(found.status)) {
+      alert(`Ticket is already marked as ${found.status}.`); return;
+    }
+    state.cartTicketId  = found.id;
+    state.cartAdvance   = Number(found.advance_payment || 0);
+    state.modal         = { type: "ticketCheckout", id: String(found.id) };
+    render(); return;
+  }
+
+  // ── Shift stats ──────────────────────────────────────────────────
+  if (el.dataset.action === "shift-stats") {
+    state.modal = { type: "shiftStats" }; render(); return;
+  }
+  if (el.dataset.action === "print-shift") {
+    printThermal(buildShiftStats()); return;
+  }
+  if (el.dataset.action === "print-receipt") {
+    if (state.modal?.sale) printThermal(buildReceiptSlip(state.modal.sale));
     return;
   }
-  if (el.dataset.action==="print-shift") {
-    printContent(buildShiftStats());
+
+  // ── New sale shortcut from dashboard ────────────────────────────
+  if (el.dataset.action === "new-sale") {
+    state.route = "pos"; render(); return;
+  }
+
+  // ── Repair component tap buttons ─────────────────────────────────
+  if (el.dataset.comp !== undefined) {
+    const name = el.dataset.comp;
+    const sel  = state.modal.selectedComponents || [];
+    const idx  = sel.findIndex(s => s.name === name);
+    if (idx >= 0) sel.splice(idx, 1);
+    else sel.push({ name, tag: "Repaired", price: 0 });
+    state.modal.selectedComponents = sel;
+    render(); return;
+  }
+  if (el.dataset.removeComp !== undefined) {
+    const sel = state.modal.selectedComponents || [];
+    sel.splice(Number(el.dataset.removeComp), 1);
+    state.modal.selectedComponents = sel;
+    render(); return;
+  }
+
+  // ── Ticket checkout: add component inline ────────────────────────
+  if (el.dataset.tcAdd !== undefined) {
+    const name = prompt("Component name:");
+    if (!name) return;
+    const ticket = state.data.tickets.find(t => String(t.id) === String(state.modal?.id));
+    if (ticket) {
+      const comps = [...(ticket.components_noted || [])];
+      comps.push({ name, condition: "New", price: 0 });
+      ticket.components_noted = comps; // local update — saved on confirm
+    }
+    render(); return;
+  }
+  if (el.dataset.tcRemove !== undefined) {
+    const ticket = state.data.tickets.find(t => String(t.id) === String(state.modal?.id));
+    if (ticket) {
+      const comps = [...(ticket.components_noted || [])];
+      comps.splice(Number(el.dataset.tcRemove), 1);
+      ticket.components_noted = comps;
+    }
+    render(); return;
+  }
+
+  // ── Ticket checkout: declined ────────────────────────────────────
+  if (el.dataset.tcDecline !== undefined) {
+    const reason = prompt("Reason customer declined repair:");
+    if (reason === null) return;
+    await updateTicket(state.modal.id, { status: "Declined", declineReason: reason });
+    state.modal = null;
+    await load(); return;
+  }
+
+  // ── Ticket checkout: confirm → add to cart ───────────────────────
+  if (el.dataset.tcConfirm !== undefined) {
+    const ticket  = state.data.tickets.find(t => String(t.id) === String(state.modal?.id));
+    if (!ticket) return;
+    const comps   = ticket.components_noted || [];
+    const priceEls = document.querySelectorAll("[data-tc-price]");
+    priceEls.forEach((inp, i) => {
+      if (comps[i]) comps[i].price = Number(inp.value) || 0;
+    });
+    const labour  = Number(document.getElementById("tc-labour")?.value || 0);
+    const advance = Number(ticket.advance_payment || 0);
+    const parts   = comps.reduce((s, c) => s + Number(c.price || 0), 0);
+    const total   = Math.max(0, parts + labour - advance);
+
+    // Save updated components back to Supabase
+    await updateTicket(ticket.id, { components: comps });
+
+    state.cartLabour   = labour;
+    state.cartAdvance  = advance;
+    state.cartTicketId = ticket.id;
+
+    // Add as single line item in cart
+    state.cart.push({
+      productId:     `ticket-${ticket.id}`,
+      name:          `Repair: ${ticket.device_brand} ${ticket.device_model} (${ticket.ticket_number})`,
+      qty:           1,
+      originalPrice: total,
+      soldPrice:     total,
+      discount:      0,
+      reason:        "",
+      isTicket:      true,
+    });
+    state.modal = null;
+    render(); return;
+  }
+
+  // ── Settle Udhar ─────────────────────────────────────────────────
+  if (el.dataset.settleId) {
+    const udharId = Number(el.dataset.settleId);
+    const amount  = Number(
+      document.querySelector(`[data-settle-amount="${udharId}"]`)?.value
+    );
+    const method  = document.querySelector(
+      `[data-settle-method="${udharId}"]`
+    )?.value || "Cash";
+    if (!amount || amount <= 0) { alert("Enter a valid amount."); return; }
+    openPinPrompt("settle", async () => {
+      await settleUdhar(udharId, amount, method);
+    });
     return;
   }
-  if (el.dataset.action==="print-receipt") {
-    const sale = state.modal?.sale;
-    if (sale) printContent(receiptPreview(sale));
-    return;
+
+  // ── Open udhar list / return flow ────────────────────────────────
+  if (el.dataset.action === "open-udhar") {
+    state.modal = { type: "udharList" }; render(); return;
+  }
+  if (el.dataset.action === "open-return") {
+    state.modal = { type: "returnFlow" }; render(); return;
   }
 });
 
+/* ── Input ───────────────────────────────────────────────────────── */
 document.addEventListener("input", event => {
-  if (event.target.dataset.filter) { state.filter=event.target.value; render(); }
+  if (event.target.dataset.filter) {
+    state.filter = event.target.value; render();
+  }
 });
+
+/* ── Change ──────────────────────────────────────────────────────── */
 document.addEventListener("change", async event => {
-  if (event.target.dataset.action==="tenant")       { state.tenantId=event.target.value; state.cart=[]; state.filter=""; await load(); }
-  if (event.target.dataset.action==="role")         { state.role=event.target.value; state.adminModule=can(state.adminModule)?state.adminModule:"dashboard"; render(); }
-  if (event.target.dataset.action==="admin-module") { state.adminModule=event.target.value; state.filter=""; render(); }
+  const t = event.target;
+
+  if (t.dataset.action === "role") {
+    state.role = t.value;
+    state.adminModule = can(state.adminModule) ? state.adminModule : "dashboard";
+    render(); return;
+  }
+  if (t.dataset.action === "admin-module") {
+    state.adminModule = t.value; state.filter = ""; render(); return;
+  }
+  if (t.dataset.action === "payment") {
+    state.checkoutPayment = t.value; render(); return;
+  }
+  if (t.dataset.udhar === "name")  { state.udharName  = t.value; return; }
+  if (t.dataset.udhar === "phone") { state.udharPhone = t.value; return; }
+
+  // Component tag change inside repair modal
+  if (t.dataset.compTag !== undefined) {
+    const sel = state.modal?.selectedComponents || [];
+    const idx = Number(t.dataset.compTag);
+    if (sel[idx]) { sel[idx].tag = t.value; }
+    return;
+  }
 });
+
+/* ── Submit ──────────────────────────────────────────────────────── */
 document.addEventListener("submit", async event => {
   event.preventDefault();
   const form = event.target;
   const data = Object.fromEntries(new FormData(form).entries());
   const type = form.dataset.form;
 
-  if (type==="settings") {
-    const logo = await fileToDataUrl(form.logo?.files?.[0]);
-    const next = { ...currentTenant(), ...data, taxRate:Number(data.taxRate||currentTenant().taxRate), logo:logo||currentTenant().logo };
-    // repairModuleEnabled is NOT changeable from the shop panel — only platform admin controls it
-    next.repairModuleEnabled = currentTenant().repairModuleEnabled;
-    await repo.put("tenants",next,true);
+  // ── Repair ticket creation ──────────────────────────────────────
+  if (type === "repair") {
+    const sel = state.modal?.selectedComponents || [];
+    const res = await createTicket({
+      customerName:   data.customerName,
+      customerPhone:  data.customerPhone,
+      deviceBrand:    data.deviceBrand,
+      deviceModel:    data.deviceModel,
+      imei:           data.imei,
+      components:     sel.map(s => ({ name: s.name, condition: s.tag, price: 0 })),
+      estimatedQuote: Number(data.estimatedQuote || 0),
+      advance:        Number(data.advance        || 0),
+      advanceMethod:  data.advanceMethod || "",
+      technicianNote: data.technicianNote || "",
+    });
+    if (!res.ok) { alert("Error saving ticket: " + res.error); return; }
+    state.modal = null;
+    printThermal(buildTicketSlip(res.data));
+    await load(); return;
   }
-  if (type==="product") {
-    const ex    = scoped("products").find(p=>p.id===state.modal.id)||{};
-    const image = await fileToDataUrl(form.image?.files?.[0]);
-    await repo.put("products",{...ex,id:ex.id||uid("prod"),tenantId:state.tenantId,...data,cost:Number(data.cost),price:Number(data.price),qty:Number(data.qty),min:Number(data.min),image:image||ex.image||""},true);
+
+  // ── Udhar customer info (called from checkout flow) ──────────────
+  if (type === "udharInfo") {
+    state.udharName  = data.udharName;
+    state.udharPhone = data.udharPhone;
+    state.modal      = null;
+    await doCheckout(); return;
   }
-  if (type==="customer")  await repo.put("customers",{id:uid("cust"),tenantId:state.tenantId,...data,loyalty:0},true);
-  if (type==="employee")  await repo.put("employees",{id:uid("emp"), tenantId:state.tenantId,...data,status:"Active"},true);
-  if (type==="repair") {
-    const emp = scoped("employees").find(e=>e.role===state.role&&e.status==="Active")||scoped("employees")[0];
-    await repo.put("repairs",{id:uid("repair"),tenantId:state.tenantId,ticket:`FP-${Math.floor(3000+Math.random()*900)}`,...data,notes:"",parts:"",labor:0,total:0,warranty:"30 days",createdBy:emp?.name||"Counter Staff",createdAt:new Date().toISOString(),timeline:["Received at counter"]},true);
+
+  // ── Return: receipt lookup ────────────────────────────────────────
+  if (type === "return-lookup") {
+    const raw    = data.receiptNo.trim().toUpperCase().replace("INV-", "");
+    const sale   = state.data.sales.find(s => String(s.id) === raw);
+    if (!sale) {
+      state.modal = { type: "returnFlow", notFound: true, receiptNo: data.receiptNo };
+      render(); return;
+    }
+    state.modal = { type: "returnFlow", receiptNo: `INV-${sale.id}` };
+    render(); return;
   }
-  if (type==="override") {
-    const item = state.cart.find(i=>i.productId===state.modal.id);
-    if (item) { item.soldPrice=Number(data.soldPrice); item.discount=Math.max(0,item.originalPrice-item.soldPrice); item.reason=data.reason; }
+
+  // ── Return: confirm + admin PIN ───────────────────────────────────
+  if (type === "return-confirm") {
+    const saleId   = Number(data.saleId);
+    const sale     = state.data.sales.find(s => s.id === saleId);
+    const items    = sale?.items_sold || [];
+    const returned = items.filter((_, i) => data[`ret_${i}`] !== undefined);
+    const refund   = returned.reduce((s, it) => s + it.sold_price * it.qty, 0);
+    openPinPrompt("return", async () => {
+      await processReturn(saleId, returned, refund, data.refundMethod, data.notes || "");
+    });
+    return;
   }
-  if (["stock","purchase"].includes(type)) await repo.queue({entity:type,action:"create",tenantId:state.tenantId,payload:data});
-  state.modal=null;
+
+  // ── Employee save (requires admin PIN) ───────────────────────────
+  if (type === "employee") {
+    openPinPrompt("admin", async () => {
+      const { error } = await sb.from("employees").insert({
+        name:     data.name,
+        pin_code: String(data.pin_code),
+        role:     data.role || "Cashier",
+        status:   "Active",
+      });
+      if (error) { alert("Error saving employee: " + error.message); return; }
+      state.modal = null;
+      await load();
+    });
+    return;
+  }
+
+  // ── Business settings ─────────────────────────────────────────────
+  if (type === "settings") {
+    const updates = {};
+    if (data.name)          updates.shop_name    = data.name;
+    if (data.address)       updates.shop_address = data.address;
+    if (data.phone)         updates.shop_phone   = data.phone;
+    if (data.primaryColor)  updates.primary_color   = data.primaryColor;
+    if (data.secondaryColor)updates.secondary_color = data.secondaryColor;
+    if (data.currency)      updates.currency     = data.currency;
+    if (data.taxRate)       updates.tax_rate     = Number(data.taxRate);
+    if (data.receiptFooter) updates.terms_text   = data.receiptFooter;
+    const { error } = await sb.from("shop_config").update(updates).eq("id", 1);
+    if (error) { alert("Settings error: " + error.message); return; }
+    state.modal = null;
+    await load(); return;
+  }
+
+  // ── Price override ────────────────────────────────────────────────
+  if (type === "override") {
+    const item = state.cart.find(i => i.productId === state.modal?.id);
+    if (item) {
+      item.soldPrice = Number(data.soldPrice);
+      item.discount  = Math.max(0, item.originalPrice - item.soldPrice);
+      item.reason    = data.reason;
+    }
+    state.modal = null; render(); return;
+  }
+
+  state.modal = null;
   await load();
 });
 
@@ -695,5 +1770,12 @@ window.addEventListener("offline", ()=>{ state.online=false; render(); });
 window.addEventListener("beforeinstallprompt", event=>{ event.preventDefault(); state.installPrompt=event; render(); });
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js");
 
-await seed();
-await load();
+/* ── Boot ─────────────────────────────────────────────────────────── */
+window.addEventListener("online",  () => { state.online = true;  render(); });
+window.addEventListener("offline", () => { state.online = false; render(); });
+window.addEventListener("beforeinstallprompt", e => {
+  e.preventDefault(); state.installPrompt = e; render();
+});
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js");
+
+await load(); // single boot call — no seed, no IndexedDB
