@@ -417,7 +417,13 @@ function printThermal(contentHtml) {
 function buildTicketSlip(ticket) {
   const comps = ticket.components_noted || [];
   return `
-    <div class="c b lg">${CFG.shop_name || "Repair Shop"}</div>
+    ${CFG.shop_logo
+  ? `<div class="c" style="margin-bottom:4px">
+       <img src="${CFG.shop_logo}"
+         style="max-width:140px;max-height:50px;object-fit:contain">
+     </div>`
+  : ""}
+<div class="c b lg">${CFG.shop_name || "Repair Shop"}</div>
     <div class="c sm">${CFG.shop_address || ""}</div>
     <div class="c sm">${CFG.shop_phone   || ""}</div>
     <div class="ln"></div>
@@ -467,7 +473,13 @@ function buildTicketSlip(ticket) {
 function buildReceiptSlip(sale) {
   const items = sale.items || [];
   return `
-    <div class="c b lg">${CFG.shop_name || "Retail Shop"}</div>
+    ${CFG.shop_logo
+  ? `<div class="c" style="margin-bottom:4px">
+       <img src="${CFG.shop_logo}"
+         style="max-width:140px;max-height:50px;object-fit:contain">
+     </div>`
+  : ""}
+<div class="c b lg">${CFG.shop_name || "Repair Shop"}</div>
     <div class="c sm">${CFG.shop_address || ""}</div>
     <div class="c sm">${CFG.shop_phone   || ""}</div>
     <div class="ln"></div>
@@ -1735,6 +1747,16 @@ document.addEventListener("submit", async event => {
   // ── Business settings ─────────────────────────────────────────────
   if (type === "settings") {
     const updates = {};
+    js// Logo upload — convert to base64 and store in shop_config
+const logoFile = form.querySelector('[name="logo"]')?.files?.[0];
+if (logoFile) {
+  const base64 = await new Promise(res => {
+    const r = new FileReader();
+    r.onload = () => res(r.result);
+    r.readAsDataURL(logoFile);
+  });
+  updates.shop_logo = base64;
+}
     if (data.name)          updates.shop_name    = data.name;
     if (data.address)       updates.shop_address = data.address;
     if (data.phone)         updates.shop_phone   = data.phone;
