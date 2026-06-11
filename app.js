@@ -647,6 +647,7 @@ function settings() {
       <button class="settings-tab ${state.settingsTab==="branding"?"active":""}" data-settings-tab="branding">Branding & Colors</button>
       <button class="settings-tab ${state.settingsTab==="contact"?"active":""}" data-settings-tab="contact">Contact & Business</button>
       <button class="settings-tab ${state.settingsTab==="receipt"?"active":""}" data-settings-tab="receipt">Receipt & Tax</button>
+<button class="settings-tab ${state.settingsTab==="components"?"active":""}" data-settings-tab="components">Repair Components</button>
     </div>
     ${settingsTabContent()}
   `;
@@ -680,6 +681,37 @@ function settingsTabContent() {
       <label class="field" style="grid-column:1/-1"><span>Receipt Footer</span><textarea name="receiptFooter">${t.receiptFooter}</textarea></label>
       <div class="modal-actions" style="grid-column:1/-1"><button class="primary-button">Save Receipt Settings</button></div>
     </form>`;
+    if (state.settingsTab === "components") {
+  const comps = CFG.quick_components || [];
+  return `
+    <div class="card" style="display:grid;gap:14px">
+      <div>
+        <h2>Quick-Tap Components</h2>
+        <p class="muted" style="font-size:13px">
+          These appear as buttons when creating a repair ticket.
+        </p>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px" id="comp-list">
+        ${comps.map((c, i) => `
+          <div style="display:flex;align-items:center;gap:6px;
+                      background:var(--surface-2);border:1px solid var(--border);
+                      border-radius:8px;padding:6px 10px">
+            <span style="font-size:13px">${c}</span>
+            <button type="button" data-remove-quick="${i}"
+              style="color:var(--danger);background:none;border:none;
+                     font-size:16px;line-height:1;padding:0 2px;cursor:pointer">×</button>
+          </div>`).join("")}
+      </div>
+      <div style="display:flex;gap:8px">
+        <input id="new-comp-input" class="search" placeholder="New component name"
+          style="flex:1">
+        <button class="primary-button" data-action="add-quick-comp">Add</button>
+      </div>
+      <button class="primary-button" data-action="save-quick-comps">
+        Save Components List
+      </button>
+    </div>`;
+}
   return "";
 }
 
@@ -1427,10 +1459,32 @@ document.addEventListener("click", async event => {
     "[data-modal],[data-close],[data-settings-tab]," +
     "[data-pin-key],[data-pp-key],[data-comp],[data-remove-comp]," +
     "[data-tc-add],[data-tc-remove],[data-tc-decline],[data-tc-confirm]," +
-    "[data-settle-id],[data-action]"
+    "[data-settle-id],[data-action],[data-remove-quick]"
   );
   if (!el) return;
+if (el.dataset.removeQuick !== undefined) {
+  const comps = [...(CFG.quick_components || [])];
+  comps.splice(Number(el.dataset.removeQuick), 1);
+  CFG.quick_components = comps;
+  render(); return;
+}
 
+if (el.dataset.action === "add-quick-comp") {
+  const input = document.getElementById("new-comp-input");
+  const val   = input?.value?.trim();
+  if (!val) return;
+  CFG.quick_components = [...(CFG.quick_components || []), val];
+  render(); return;
+}
+
+if (el.dataset.action === "save-quick-comps") {
+  const { error } = await sb.from("shop_config")
+    .update({ quick_components: CFG.quick_components })
+    .eq("id", 1);
+  if (error) { alert("Save failed: " + error.message); return; }
+  alert("Components saved.");
+  await load(); return;
+}
   // ── Navigation ──────────────────────────────────────────────────
   if (el.dataset.route) {
     state.route = el.dataset.route; state.filter = ""; render(); return;
