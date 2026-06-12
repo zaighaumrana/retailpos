@@ -1542,7 +1542,9 @@ function modal() {
       </div>`,
 
     // ── Shift stats ─────────────────────────────────────────────────
-    shiftStats: `
+    shiftStats: (() => {
+      if (type !== "shiftStats") return "";
+      return `
       <div class="modal" style="max-width:480px">
         <h2>Shift Stats</h2>
         <div class="shift-print-wrap">${buildShiftStats()}</div>
@@ -1550,7 +1552,8 @@ function modal() {
           <button class="secondary-button" data-close>Close</button>
           <button class="primary-button" data-action="print-shift">Print / Save PDF</button>
         </div>
-      </div>`,
+      </div>`;
+    })(),
 
     // ── Employee add/edit ───────────────────────────────────────────
     employee: `
@@ -1659,6 +1662,7 @@ async function processReturn(saleId, returnedItems, refundAmount, method, notes)
 
 
 function receiptPreview(sale) {
+  if (!sale) return "";
   const t = currentTenant();
   return `<div class="receipt-preview"><center><strong>${t.name}</strong><br>${t.address}<br>${t.phone}</center><hr>
     Receipt ${sale.receiptNo}<br>Date ${new Date(sale.date).toLocaleString()}<br>Cashier ${sale.cashier}<hr>
