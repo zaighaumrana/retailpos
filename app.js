@@ -63,6 +63,10 @@ async function loadConfig() {
   if (typeof CFG.quick_components === "string") {
     try { CFG.quick_components = JSON.parse(CFG.quick_components); } catch {}
   }
+  if (typeof CFG.quick_items === "string") {
+    try { CFG.quick_items = JSON.parse(CFG.quick_items); } catch { CFG.quick_items = []; }
+  }
+  if (!Array.isArray(CFG.quick_items)) CFG.quick_items = [];
   applyBranding();
 }
 
@@ -659,7 +663,8 @@ function settings() {
       <button class="settings-tab ${state.settingsTab==="branding"?"active":""}" data-settings-tab="branding">Branding & Colors</button>
       <button class="settings-tab ${state.settingsTab==="contact"?"active":""}" data-settings-tab="contact">Contact & Business</button>
       <button class="settings-tab ${state.settingsTab==="receipt"?"active":""}" data-settings-tab="receipt">Receipt & Tax</button>
-<button class="settings-tab ${state.settingsTab==="components"?"active":""}" data-settings-tab="components">Repair Components</button>
+      <button class="settings-tab ${state.settingsTab==="components"?"active":""}" data-settings-tab="components">Repair Components</button>
+      <button class="settings-tab ${state.settingsTab==="quickitems"?"active":""}" data-settings-tab="quickitems">Quick Items</button>
     </div>
     ${settingsTabContent()}
   `;
@@ -724,7 +729,56 @@ function settingsTabContent() {
       </button>
     </div>`;
 }
-  return "";
+  if (state.settingsTab === "quickitems") {
+    const items = CFG.quick_items || [];
+    return `
+      <div class="card" style="display:grid;gap:16px">
+        <div>
+          <h2>Quick Sale Items</h2>
+          <p class="muted" style="font-size:13px">
+            These appear as tap buttons in the POS cart.
+            Each item has preset price options the cashier picks from.
+          </p>
+        </div>
+        ${items.map((item, i) => `
+          <div style="padding:12px;background:var(--surface-2);
+                      border-radius:8px;display:grid;gap:8px">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <strong>${item.name}</strong>
+              <button type="button" data-remove-qitem="${i}"
+                style="color:var(--danger);background:none;border:none;
+                       font-size:18px;cursor:pointer">×</button>
+            </div>
+            <div style="font-size:13px;color:var(--muted)">
+              Price options: ${item.prices.map((p,pi) => `
+                <span style="display:inline-flex;align-items:center;gap:4px;
+                             margin-right:6px">
+                  ${money(p, CFG.currency)}
+                  <button type="button" data-remove-qprice="${i}-${pi}"
+                    style="color:var(--danger);background:none;border:none;
+                           font-size:14px;cursor:pointer;padding:0">×</button>
+                </span>`).join("")}
+            </div>
+            <div style="display:flex;gap:8px">
+              <input type="number" placeholder="Add price option"
+                id="qprice-input-${i}" min="1"
+                style="flex:1;border:1px solid var(--border);border-radius:6px;
+                       padding:7px 9px;background:var(--surface);color:var(--text)">
+              <button type="button" class="secondary-button"
+                data-add-qprice="${i}">+ Price</button>
+            </div>
+          </div>`).join("")}
+        <div style="display:flex;gap:8px">
+          <input id="qitem-name" class="search" placeholder="Item name (e.g. Handsfree)"
+            style="flex:1">
+          <button class="primary-button" data-action="add-qitem">Add Item</button>
+        </div>
+        <button class="primary-button" data-action="save-qitems">
+          Save Quick Items
+        </button>
+      </div>`;
+  }
+  return "";;
 }
 
 /* ── Branding modal (quick access from topbar — removed, now in settings page only) ── */
@@ -762,7 +816,21 @@ function pos() {
     <div class="grid pos-layout">
       <!-- Left: Recent tickets as quick-add if repair module on -->
       <div class="grid" style="align-content:start;gap:12px">
-        ${tenant.repairModuleEnabled ? `
+      ${(CFG.quick_items||[]).length ? `
+          <div class="card">
+            <h2 style="margin-bottom:10px">Quick Items</h2>
+            <div style="display:flex;flex-wrap:wrap;gap:8px">
+              ${(CFG.quick_items||[]).map(item => `
+                <div style="position:relative">
+                  <button class="secondary-button" style="font-size:13px;padding:7px 12px"
+                    data-qitem-name="${item.name}"
+                    data-qitem-prices='${JSON.stringify(item.prices)}'>
+                    ${item.name}
+                  </button>
+                </div>`).join("")}
+            </div>
+          </div>` : ""}  
+      ${tenant.repairModuleEnabled ? `
           <div class="card">
             <h2 style="margin-bottom:12px">Open Repair Tickets</h2>
             ${(state.data.tickets || [])
@@ -920,123 +988,240 @@ function buildShiftStats() {
 ═══════════════════════════════════════════════════════════════════ */
 function dashboard() {
   const tenant  = currentTenant();
-  const sales   = scoped("sales");
-  const reps    = scoped("repairs");
-  const prods   = scoped("products");
-  const todayS  = sales.filter(s=>s.date.slice(0,10)==="2026-06-09");
-  const total   = sales.reduce((s,x)=>s+x.total,0);
-  const profit  = sales.reduce((s,x)=>s+x.profit,0);
-  const low     = prods.filter(p=>p.qty<=p.min);
-  const kpis    = [["Today's Sales",todayS.reduce((s,x)=>s+x.total,0),"+12.4%"],["Weekly Sales",sales.slice(0,7).reduce((s,x)=>s+x.total,0),"+8.1%"],["Monthly Sales",total,"+18.6%"],["Quarterly Sales",total*2.9,"+22.0%"],["Total Revenue",total,"+15.3%"],["Total Profit",profit,"+9.8%"]];
+  const sales   = state.data.sales   || [];
+  const tickets = state.data.tickets || [];
+  const udhar   = state.data.udhar   || [];
+  const todayStr = new Date().toISOString().slice(0,10);
+  const todayS   = sales.filter(s => (s.created_at||"").slice(0,10) === todayStr);
+  const total    = sales.reduce((s,x) => s + Number(x.total_bill||0), 0);
+  const todayRev = todayS.reduce((s,x) => s + Number(x.total_bill||0), 0);
+  const pending  = tickets.filter(t => !["Delivered","Declined"].includes(t.status)).length;
+  const udharBal = udhar.filter(u => u.status !== "Settled")
+                        .reduce((s,u) => s + Number(u.balance_due||0), 0);
+  const kpis = [
+    ["Today's Revenue",  todayRev,          ""],
+    ["Total Revenue",    total,             ""],
+    ["Total Sales",      sales.length,      ""],
+    ["Open Tickets",     pending,           ""],
+    ["Udhar Balance",    udharBal,          ""],
+    ["Employees",        (state.data.employees||[]).length, ""],
+  ];
   return `
-    ${tit("Dashboard","Analytics, offline health, and operating highlights.",`<button class="primary-button" data-action="new-sale">New Sale</button>`)}
-    <div class="grid kpi-grid">${kpis.map(([l,v,tr])=>`<div class="card kpi"><span class="label">${l}</span><span class="value">${money(v,tenant.currency)}</span><span class="trend">${tr} vs prior</span></div>`).join("")}</div>
-    <div class="grid two-col">
-      <div class="card"><h2>Revenue Trends</h2><div class="chart-bars">${[44,62,51,78,70,88,95].map((h,i)=>`<div class="bar" style="height:${h}%"><span>${["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][i]}</span></div>`).join("")}</div></div>
-      <div class="card"><h2>Operational Alerts</h2><div class="list">
-        <div class="list-row"><span>Pending Repairs</span><strong>${reps.filter(r=>!["Delivered","Cancelled"].includes(r.status)).length}</strong></div>
-        <div class="list-row"><span>Low Stock Alerts</span><strong>${low.length}</strong></div>
-        <div class="list-row"><span>Sync Conflicts</span><strong>${state.data.conflicts.length}</strong></div>
-        <div class="list-row"><span>Best Seller</span><strong>${prods[2]?.name||"USB-C Fast Charger"}</strong></div>
-      </div></div>
+    ${tit("Dashboard","Live overview of sales, tickets, and operations.",
+      `<button class="primary-button" data-action="new-sale">Go to POS</button>`)}
+    <div class="grid kpi-grid">
+      ${kpis.map(([l,v]) => `
+        <div class="card kpi">
+          <span class="label">${l}</span>
+          <span class="value">${typeof v === "number" && l !== "Total Sales" && l !== "Open Tickets" && l !== "Employees"
+            ? money(v, tenant.currency) : v}</span>
+        </div>`).join("")}
     </div>
     <div class="grid two-col">
-      <div class="card">${tbl("Recent Transactions",["Receipt","Customer","Payment","Total"],sales.slice(0,6).map(s=>[s.receiptNo,s.customer,s.payment,money(s.total,tenant.currency)]))}</div>
-      <div class="card"><h2>Best Selling Products</h2><div class="list">${prods.slice(0,5).map((p,i)=>`<div class="list-row"><span>${p.name}<br><small class="muted">${p.category}</small></span><strong>${Math.max(8,38-i*5)} sold</strong></div>`).join("")}</div></div>
+      <div class="card">
+        <h2>Recent Sales</h2>
+        <div class="table-wrap"><table>
+          <thead><tr>
+            <th>Invoice</th><th>Customer</th><th>Payment</th><th>Total</th>
+          </tr></thead>
+          <tbody>
+            ${sales.slice(0,8).map(s => `<tr>
+              <td>INV-${s.id}</td>
+              <td>${s.customer_name || "Walk-in"}</td>
+              <td>${s.payment_method}</td>
+              <td>${money(s.total_bill, tenant.currency)}</td>
+            </tr>`).join("")}
+          </tbody>
+        </table></div>
+      </div>
+      <div class="card">
+        <h2>Operational Alerts</h2>
+        <div class="list">
+          <div class="list-row">
+            <span>Pending Repairs</span><strong>${pending}</strong>
+          </div>
+          <div class="list-row">
+            <span>Outstanding Udhar</span>
+            <strong>${udhar.filter(u=>u.status!=="Settled").length}</strong>
+          </div>
+          <div class="list-row">
+            <span>Today's Transactions</span>
+            <strong>${todayS.length}</strong>
+          </div>
+          <div class="list-row">
+            <span>Active Employees</span>
+            <strong>${(state.data.employees||[]).filter(e=>e.status==="Active").length}</strong>
+          </div>
+        </div>
+      </div>
     </div>`;
-}
-
-function inventory() {
-  if (!CFG.inventory_module_enabled) {
-    return `<div class="empty" style="min-height:300px">
-      Inventory module is disabled for this account.<br>
-      <span style="font-size:13px">Contact your platform admin to enable it.</span>
-    </div>`;
-  }
-  const items = (state.data.inventory || [])
-    .filter(p => (`${p.name} ${p.sku} ${p.category}`)
-      .toLowerCase().includes(state.filter.toLowerCase()));
-  return `
-    ${tit("Inventory", "Products, stock levels, and pricing.",
-      `<button class="primary-button" data-modal="inv-add">+ Add Item</button>`)}
-    ${tlb("Search products, SKU…", "inv", "")}
-    <div class="card">
-      ${items.length ? `
-        <div class="table-wrap">
-          <table>
-            <thead><tr>
-              <th>Name</th><th>SKU</th><th>Category</th>
-              <th>Price</th><th>Cost</th><th>Stock</th><th>Status</th><th></th>
-            </tr></thead>
-            <tbody>
-              ${items.map(p => `<tr>
-                <td><strong>${p.name}</strong></td>
-                <td>${p.sku || "—"}</td>
-                <td>${p.category}</td>
-                <td>${money(p.price, CFG.currency)}</td>
-                <td>${money(p.cost, CFG.currency)}</td>
-                <td>${p.qty}</td>
-                <td><span class="badge ${p.qty <= p.min_qty ? "bad" : "good"}">
-                  ${p.qty <= p.min_qty ? "Low Stock" : "In Stock"}
-                </span></td>
-                <td>
-                  <button class="secondary-button"
-                    data-inv-edit="${p.id}">Edit</button>
-                  <button class="danger-button"
-                    data-inv-delete="${p.id}">Delete</button>
-                </td>
-              </tr>`).join("")}
-            </tbody>
-          </table>
-        </div>` :
-        `<div class="empty">No items yet. Add your first product.</div>`}
-    </div>`;
-}
-
-function purchases() {
-  const rows = scoped("products").slice(0,7).map((p,i)=>[`PO-${3300+i}`,["TechSource Wholesale","Mobile Parts Hub","Retail Supply Co."][i%3],p.name,`${12+i*3} received`,i%4?"Received":"Damaged review"]);
-  return `
-    ${tit("Purchases","Supplier management, purchase orders, receiving, and damaged inventory.",`<button class="primary-button" data-modal="purchase">New Purchase Order</button>`)}
-    <div class="grid three-col">${["Open Purchase Orders","Damaged Units","Returned Items"].map((x,i)=>`<div class="card kpi"><span class="label">${x}</span><span class="value">${[8,3,11][i]}</span></div>`).join("")}</div>
-    <div class="card">${tbl("Recent Stock Intake",["PO","Supplier","Item","Quantity","Status"],rows)}</div>`;
-}
-
-function customers() {
-  const rows = scoped("customers").filter(c=>(`${c.name} ${c.phone} ${c.email}`).toLowerCase().includes(state.filter.toLowerCase()));
-  return `
-    ${tit("Customers","Customer profiles, loyalty points, purchase and repair history.",`<button class="primary-button" data-modal="customer">Add Customer</button>`)}
-    ${tlb("Search customers","customer","")}
-    <div class="card">${tbl("Customer Directory",["Name","Phone","Email","Loyalty","Notes"],rows.map(c=>[c.name,c.phone,c.email,`${c.loyalty} pts`,c.notes]))}</div>`;
 }
 
 function repairs() {
-  const rows = scoped("repairs").filter(r=>(`${r.ticket} ${r.customer} ${r.model} ${r.status}`).toLowerCase().includes(state.filter.toLowerCase()));
+  const rows = (state.data.tickets || [])
+    .filter(t => (`${t.ticket_number} ${t.customer_name} ${t.device_model} ${t.status}`)
+      .toLowerCase().includes(state.filter.toLowerCase()));
+  const tenant = currentTenant();
+  const statusColors = {
+    "Pending":"warn","In Progress":"warn",
+    "Ready":"good","Delivered":"good","Declined":"bad"
+  };
   return `
-    ${tit("Repair Tickets","Device repair workflow, technician assignment, status, warranty, and timeline.",`<button class="primary-button" data-modal="repair">New Ticket</button>`)}
-    ${tlb("Search tickets, customer, device, status","repair","")}
+    ${tit("Repair Tickets","Full repair queue with status tracking.",
+      `<button class="primary-button" data-modal="repair">New Ticket</button>`)}
+    ${tlb("Search tickets, customer, device…","repair","")}
     <div class="grid two-col">
-      <div class="card">${tbl("Repair Queue",["Ticket","Customer","Device","Technician","ETA","Status",""],rows.map(r=>[r.ticket,r.customer,`${r.brand} ${r.model}`,r.technician,r.eta,statusBadge(r.status),`<button class="secondary-button" data-modal="repairView" data-id="${r.id}">View</button>`]))}</div>
-      <div class="card"><h2>Status Mix</h2><div class="list">${["Received","Diagnosing","Waiting for Parts","In Progress","Ready for Pickup","Delivered"].map(s=>`<div class="list-row"><span>${s}</span><strong>${rows.filter(r=>r.status===s).length}</strong></div>`).join("")}</div></div>
+      <div class="card">
+        <div class="table-wrap"><table>
+          <thead><tr>
+            <th>Ticket</th><th>Customer</th><th>Device</th>
+            <th>Advance</th><th>Status</th><th></th>
+          </tr></thead>
+          <tbody>
+            ${rows.length ? rows.map(r => `<tr>
+              <td><strong>${r.ticket_number}</strong></td>
+              <td>${r.customer_name}<br>
+                <small class="muted">${r.customer_phone}</small></td>
+              <td>${r.device_brand} ${r.device_model}<br>
+                <small class="muted">${r.imei||""}</small></td>
+              <td>${Number(r.advance_payment||0) > 0
+                ? money(r.advance_payment, tenant.currency) : "—"}</td>
+              <td><span class="badge ${statusColors[r.status]||"warn"}">
+                ${r.status}</span></td>
+              <td>
+                <button class="secondary-button"
+                  data-action="add-ticket-to-cart"
+                  style="font-size:12px">Collect</button>
+              </td>
+            </tr>`).join("") :
+            `<tr><td colspan="6" style="text-align:center;color:var(--muted)">
+              No tickets found.</td></tr>`}
+          </tbody>
+        </table></div>
+      </div>
+      <div class="card">
+        <h2>Status Summary</h2>
+        <div class="list">
+          ${["Pending","In Progress","Ready","Delivered","Declined"].map(s => `
+            <div class="list-row">
+              <span>${s}</span>
+              <strong>${(state.data.tickets||[]).filter(t=>t.status===s).length}</strong>
+            </div>`).join("")}
+        </div>
+      </div>
     </div>`;
 }
 
 function reports() {
-  const tenant = currentTenant();
-  const sales  = scoped("sales");
-  const disc   = sales.reduce((s,x)=>s+x.items.reduce((a,i)=>a+i.discount*i.qty,0),0);
+  const tenant  = currentTenant();
+  const sales   = state.data.sales   || [];
+  const tickets = state.data.tickets || [];
+  const udhar   = state.data.udhar   || [];
+  const total   = sales.reduce((s,x) => s + Number(x.total_bill||0), 0);
+  const disc    = sales.reduce((s,x) => s + Number(x.discount||0), 0);
+  const labour  = sales.reduce((s,x) => s + Number(x.labour_cost||0), 0);
+  const avgOrder= sales.length ? total / sales.length : 0;
+  const udharOut= udhar.filter(u=>u.status!=="Settled")
+                       .reduce((s,u)=>s+Number(u.balance_due||0),0);
   return `
-    ${tit("Reports","Daily, weekly, monthly analytics with discount tracking.","")}
-    <div class="grid kpi-grid">${[["Revenue",sales.reduce((s,x)=>s+x.total,0)],["Profit",sales.reduce((s,x)=>s+x.profit,0)],["Discounts",disc],["Transactions",sales.length],["Avg Order",sales.reduce((s,x)=>s+x.total,0)/sales.length],["Yearly Run Rate",sales.reduce((s,x)=>s+x.total,0)*12]].map(([l,v])=>`<div class="card kpi"><span class="label">${l}</span><span class="value">${typeof v==="number"&&l!=="Transactions"?money(v,tenant.currency):v}</span></div>`).join("")}</div>
+    ${tit("Reports","Sales analytics, discounts, and outstanding credits.","")}
+    <div class="grid kpi-grid">
+      ${[
+        ["Total Revenue",   total],
+        ["Discounts Given", disc],
+        ["Labour Income",   labour],
+        ["Average Invoice", avgOrder],
+        ["Udhar Outstanding", udharOut],
+        ["Total Invoices",  sales.length],
+      ].map(([l,v]) => `
+        <div class="card kpi">
+          <span class="label">${l}</span>
+          <span class="value">${l === "Total Invoices"
+            ? v : money(v, tenant.currency)}</span>
+        </div>`).join("")}
+    </div>
     <div class="grid two-col">
-      <div class="card"><h2>Monthly Sales</h2><div class="chart-bars">${[52,57,63,68,75,82,92].map((h,i)=>`<div class="bar" style="height:${h}%"><span>${["Jan","Feb","Mar","Apr","May","Jun","Jul"][i]}</span></div>`).join("")}</div></div>
-      <div class="card">${tbl("Product Performance",["Product","Revenue","Profit","Discounts"],scoped("products").slice(0,6).map((p,i)=>[p.name,money(p.price*(18-i),tenant.currency),money((p.price-p.cost)*(18-i),tenant.currency),money(i%2?12:0,tenant.currency)]))}</div>
+      <div class="card">
+        <h2>Payment Method Breakdown</h2>
+        <div class="list">
+          ${["Cash","Raast","JazzCash","EasyPaisa","Bank Transfer","Udhar"].map(m => {
+            const count = sales.filter(s=>s.payment_method===m).length;
+            const rev   = sales.filter(s=>s.payment_method===m)
+                               .reduce((s,x)=>s+Number(x.total_bill||0),0);
+            return count ? `
+              <div class="list-row">
+                <span>${m} <small class="muted">(${count})</small></span>
+                <strong>${money(rev, tenant.currency)}</strong>
+              </div>` : "";
+          }).join("")}
+        </div>
+      </div>
+      <div class="card">
+        <h2>Repair Summary</h2>
+        <div class="list">
+          <div class="list-row">
+            <span>Total Tickets</span>
+            <strong>${tickets.length}</strong>
+          </div>
+          <div class="list-row">
+            <span>Delivered</span>
+            <strong>${tickets.filter(t=>t.status==="Delivered").length}</strong>
+          </div>
+          <div class="list-row">
+            <span>Declined</span>
+            <strong>${tickets.filter(t=>t.status==="Declined").length}</strong>
+          </div>
+          <div class="list-row">
+            <span>Still Open</span>
+            <strong>${tickets.filter(t=>!["Delivered","Declined"].includes(t.status)).length}</strong>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Recent Invoices</h2>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Invoice</th><th>Customer</th><th>Items</th>
+          <th>Payment</th><th>Total</th><th>Date</th>
+        </tr></thead>
+        <tbody>
+          ${sales.slice(0,15).map(s => `<tr>
+            <td>INV-${s.id}</td>
+            <td>${s.customer_name||"Walk-in"}</td>
+            <td>${(s.items_sold||[]).length} item(s)</td>
+            <td>${s.payment_method}</td>
+            <td>${money(s.total_bill, tenant.currency)}</td>
+            <td>${new Date(s.created_at).toLocaleDateString()}</td>
+          </tr>`).join("")}
+        </tbody>
+      </table></div>
     </div>`;
 }
 
 function employees() {
+  const emps = state.data.employees || [];
   return `
-    ${tit("Employees","Role-based access, status controls, and permission management.",`<button class="primary-button" data-modal="employee">Add Employee</button>`)}
-    <div class="card">${tbl("Team",["Name","Phone","Email","Role","Status"],scoped("employees").map(e=>[e.name,e.phone,e.email,e.role,`<span class="badge ${e.status==="Active"?"good":"bad"}">${e.status}</span>`]))}</div>`;
+    ${tit("Employees","Staff PINs, roles, and access control.",
+      `<button class="primary-button" data-modal="employee">Add Employee</button>`)}
+    <div class="card">
+      ${emps.length ? `
+        <div class="table-wrap"><table>
+          <thead><tr>
+            <th>Name</th><th>Role</th><th>Status</th><th>PIN</th>
+          </tr></thead>
+          <tbody>
+            ${emps.map(e => `<tr>
+              <td><strong>${e.name}</strong></td>
+              <td>${e.role}</td>
+              <td><span class="badge ${e.status==="Active"?"good":"bad"}">
+                ${e.status}</span></td>
+              <td><span class="muted">••••</span></td>
+            </tr>`).join("")}
+          </tbody>
+        </table></div>` :
+        `<div class="empty">No employees yet. Add one above.</div>`}
+    </div>`;
 }
 
 function subscriptions() {
@@ -1059,6 +1244,25 @@ function modal() {
   const ticket = (state.data.tickets || []).find(t => String(t.id) === String(id));
 
   const forms = {
+
+    "qitem-pick": (() => {
+      const { name, prices } = state.modal;
+      return `
+        <div class="modal" style="max-width:340px">
+          <h2>${name}</h2>
+          <p class="muted">Select price:</p>
+          <div style="display:grid;gap:8px;margin-top:8px">
+            ${prices.map((p, i) => `
+              <button class="secondary-button" style="font-size:16px;min-height:48px"
+                data-pick-price="${i}">
+                ${money(p, CFG.currency)}
+              </button>`).join("")}
+          </div>
+          <div class="modal-actions">
+            <button class="secondary-button" data-close>Cancel</button>
+          </div>
+        </div>`;
+    })(),
 
     // ── Repair ticket creation ──────────────────────────────────────
     repair: (() => {
@@ -1610,7 +1814,8 @@ document.addEventListener("click", async event => {
     "[data-pin-key],[data-pp-key],[data-comp],[data-remove-comp]," +
     "[data-tc-add],[data-tc-remove],[data-tc-decline],[data-tc-confirm]," +
     "[data-settle-id],[data-action],[data-remove-quick],[data-quick-collect]," +
-    "[data-inv-edit],[data-inv-delete]"
+    "[data-inv-edit],[data-inv-delete],[data-remove-qitem],[data-add-qprice]," +
+    "[data-remove-qprice],[data-qitem-name],[data-pick-price]"
   );
   if (!el) return;
 
@@ -1845,6 +2050,81 @@ if (el.dataset.action === "save-quick-comps") {
   }
   if (el.dataset.action === "open-return") {
     state.modal = { type: "returnFlow" }; render(); return;
+  }
+
+  // ── Quick items ──────────────────────────────────────────────────
+  if (el.dataset.qitemName) {
+    const prices = JSON.parse(el.dataset.qitemPrices || "[]");
+    const name   = el.dataset.qitemName;
+    if (prices.length === 1) {
+      // only one price — add directly
+      state.cart.push({
+        productId:     `qi-${name}-${Date.now()}`,
+        name,
+        qty:           1,
+        originalPrice: prices[0],
+        soldPrice:     prices[0],
+        discount:      0,
+        reason:        "",
+      });
+      render();
+    } else {
+      // show price picker
+      state.modal = { type: "qitem-pick", name, prices };
+      render();
+    }
+    return;
+  }
+
+  if (el.dataset.action === "add-qitem") {
+    const input = document.getElementById("qitem-name");
+    const val   = input?.value?.trim();
+    if (!val) return;
+    CFG.quick_items = [...(CFG.quick_items||[]), { name: val, prices: [] }];
+    render(); return;
+  }
+  if (el.dataset.action === "save-qitems") {
+    const { error } = await sb.from("shop_config")
+      .update({ quick_items: CFG.quick_items }).eq("id", 1);
+    if (error) { alert("Save failed: " + error.message); return; }
+    alert("Quick items saved.");
+    await load(); return;
+  }
+  if (el.dataset.removeQitem !== undefined) {
+    const items = [...(CFG.quick_items||[])];
+    items.splice(Number(el.dataset.removeQitem), 1);
+    CFG.quick_items = items;
+    render(); return;
+  }
+  if (el.dataset.addQprice !== undefined) {
+    const idx   = Number(el.dataset.addQprice);
+    const input = document.getElementById(`qprice-input-${idx}`);
+    const val   = Number(input?.value);
+    if (!val || val <= 0) return;
+    CFG.quick_items[idx].prices.push(val);
+    render(); return;
+  }
+  if (el.dataset.removeQprice !== undefined) {
+    const [i, pi] = el.dataset.removeQprice.split("-").map(Number);
+    CFG.quick_items[i].prices.splice(pi, 1);
+    render(); return;
+  }
+
+  // ── Quick item price picker (when multiple prices) ───────────────
+  if (el.dataset.pickPrice !== undefined) {
+    const { name, prices } = state.modal;
+    const price = prices[Number(el.dataset.pickPrice)];
+    state.cart.push({
+      productId:     `qi-${name}-${Date.now()}`,
+      name,
+      qty:           1,
+      originalPrice: price,
+      soldPrice:     price,
+      discount:      0,
+      reason:        "",
+    });
+    state.modal = null;
+    render(); return;
   }
 
   // ── Inventory ────────────────────────────────────────────────────
