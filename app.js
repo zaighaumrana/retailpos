@@ -1224,6 +1224,51 @@ function employees() {
     </div>`;
 }
 
+
+function inventory() {
+  const tenant = currentTenant();
+  const items  = state.data.inventory || [];
+  const filter = (state.filter || "").toLowerCase();
+  const filtered = items.filter(i =>
+    !filter ||
+    (i.name     || "").toLowerCase().includes(filter) ||
+    (i.sku      || "").toLowerCase().includes(filter) ||
+    (i.category || "").toLowerCase().includes(filter)
+  );
+  const lowStock = items.filter(i => Number(i.qty || 0) <= Number(i.min_qty || 0) && Number(i.min_qty || 0) > 0);
+  return `
+    ${tit("Inventory","Stock levels, pricing, and alerts.",
+      `<button class="primary-button" data-modal="inv-add">+ Add Item</button>`)}
+    ${lowStock.length ? `
+      <div style="background:color-mix(in srgb,var(--warning) 12%,var(--surface));border:1px solid color-mix(in srgb,var(--warning) 30%,var(--border));border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:12px">
+        ⚠ ${lowStock.length} item${lowStock.length>1?"s":""} low on stock:
+        ${lowStock.map(i=>`<strong>${i.name}</strong> (${i.qty} left)`).join(", ")}
+      </div>` : ""}
+    <div class="card">
+      <div style="margin-bottom:10px">
+        <input class="search-input" placeholder="Search inventory…" data-filter="inv" value="${state.filter||""}" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:8px 12px;background:var(--surface);color:var(--text)">
+      </div>
+      ${filtered.length ? `
+        <div class="table-wrap"><table>
+          <thead><tr><th>Name</th><th>SKU</th><th>Category</th><th>Qty</th><th>Sell Price</th><th>Cost</th><th>Actions</th></tr></thead>
+          <tbody>
+            ${filtered.map(i => `<tr>
+              <td><strong>${i.name}</strong></td>
+              <td class="muted">${i.sku||"—"}</td>
+              <td>${i.category||"—"}</td>
+              <td><span class="badge ${Number(i.qty||0) <= Number(i.min_qty||0) && Number(i.min_qty||0)>0 ? "bad" : "good"}">${i.qty}</span></td>
+              <td>${money(i.price, tenant.currency)}</td>
+              <td class="muted">${money(i.cost, tenant.currency)}</td>
+              <td>
+                <button class="secondary-button" style="font-size:12px;padding:4px 10px" data-inv-edit="${i.id}">Edit</button>
+                <button class="secondary-button" style="font-size:12px;padding:4px 10px;color:var(--danger)" data-inv-delete="${i.id}">Delete</button>
+              </td>
+            </tr>`).join("")}
+          </tbody>
+        </table></div>` :
+        `<div class="empty">${filter ? "No items match your search." : "No inventory items yet. Add one above."}</div>`}
+    </div>`;
+}
 function subscriptions() {
   const tenant = currentTenant();
   return `
@@ -1247,6 +1292,7 @@ function modal() {
 
     "qitem-pick": (() => {
       const { name, prices } = state.modal;
+      if (!prices) return "";
       return `
         <div class="modal" style="max-width:340px">
           <h2>${name}</h2>
