@@ -1577,7 +1577,9 @@ function modal() {
     })(),
 
     // ── Receipt ─────────────────────────────────────────────────────
-    receipt: `
+    receipt: (() => {
+      if (type !== "receipt") return "";
+      return `
       <div class="modal">
         <h2>Receipt</h2>
         ${receiptPreview(state.modal?.sale)}
@@ -1585,7 +1587,8 @@ function modal() {
           <button class="secondary-button" data-close>Close</button>
           <button class="primary-button" data-action="print-receipt">Print / Save PDF</button>
         </div>
-      </div>`,
+      </div>`;
+    })(),
 
     // ── Shift stats ─────────────────────────────────────────────────
     shiftStats: (() => {
@@ -1709,12 +1712,29 @@ async function processReturn(saleId, returnedItems, refundAmount, method, notes)
 
 function receiptPreview(sale) {
   if (!sale) return "";
-  const t = currentTenant();
-  return `<div class="receipt-preview"><center><strong>${t.name}</strong><br>${t.address}<br>${t.phone}</center><hr>
-    Receipt ${sale.receiptNo}<br>Date ${new Date(sale.date).toLocaleString()}<br>Cashier ${sale.cashier}<hr>
-    ${sale.items.map(i=>`${i.name}<br>${i.qty} × ${money(i.soldPrice,t.currency)}${i.discount?` (disc ${money(i.discount,t.currency)})`:""}`)  .join("<br>")}
-    <hr>Tax ${money(sale.tax,t.currency)}<br><strong>Total ${money(sale.total,t.currency)}</strong><br>Payment ${sale.payment}<hr><center>${t.receiptFooter}</center>
-  </div>`;
+  const t     = currentTenant();
+  const items = sale.items || [];
+  return `
+    <div class="receipt-preview">
+      <center>
+        ${t.logo ? `<img src="${t.logo}" style="max-width:120px;max-height:44px;object-fit:contain;margin-bottom:6px"><br>` : ""}
+        <strong>${t.name}</strong><br>${t.address || ""}<br>${t.phone || ""}
+      </center>
+      <hr>
+      Receipt: ${sale.receiptNo || "—"}<br>
+      Date: ${sale.date ? new Date(sale.date).toLocaleString() : new Date().toLocaleString()}<br>
+      Cashier: ${sale.cashier || "Counter"}<br>
+      Customer: ${sale.customer || "Walk-in"}
+      <hr>
+      ${items.map(i => `${i.name}<br><small>${i.qty} × ${money(i.soldPrice, t.currency)}${i.discount > 0 ? ` (disc ${money(i.discount, t.currency)})` : ""}</small>`).join("<br>")}
+      <hr>
+      ${sale.discount > 0 ? `Discount: ${money(sale.discount, t.currency)}<br>` : ""}
+      ${sale.tax > 0 ? `Tax: ${money(sale.tax, t.currency)}<br>` : ""}
+      <strong>Total: ${money(sale.total, t.currency)}</strong><br>
+      Payment: ${sale.payment || "—"}
+      <hr>
+      <center>${t.receiptFooter || ""}</center>
+    </div>`;
 }
 
 async function fileToDataUrl(file) {
@@ -1726,10 +1746,11 @@ async function fileToDataUrl(file) {
    CART / CHECKOUT
 ═══════════════════════════════════════════════════════════════════ */
 function addToCart(productId) {
-  const p   = scoped("products").find(x=>x.id===productId);
-  const ex  = state.cart.find(i=>i.productId===productId);
+  const p  = scoped("products").find(x => x.id === productId);
+  if (!p) return;
+  const ex = state.cart.find(i => i.productId === productId);
   if (ex) ex.qty += 1;
-  else state.cart.push({productId,name:p.name,qty:1,originalPrice:p.price,soldPrice:p.price,discount:0,reason:""});
+  else state.cart.push({ productId, name: p.name, qty: 1, originalPrice: p.price, soldPrice: p.price, discount: 0, reason: "" });
   render();
 }
 function updateQty(productId,delta) {
@@ -2220,7 +2241,7 @@ document.addEventListener("change", async event => {
   if (t.dataset.compTag !== undefined) {
     const sel = state.modal?.selectedComponents || [];
     const idx = Number(t.dataset.compTag);
-    if (sel[idx]) { sel[idx].tag = t.value; }
+    if (sel[idx]) { sel[idx].tag = t.value; render(); }
     return;
   }
 });
