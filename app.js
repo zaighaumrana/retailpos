@@ -1358,7 +1358,7 @@ function modal() {
                 data-comp="${c}">${c}${active ? " ✓" : ""}</button>`;
             }).join("")}
           </div>
-          ${sel.length ? `<div id="repair-sel-list" style="display:grid;gap:6px;margin-bottom:10px">
+          ${sel.length ? `<div style="display:grid;gap:6px;margin-bottom:10px">
             ${sel.map((s, i) => `
               <div style="display:flex;align-items:center;gap:8px;padding:8px;
                           background:var(--surface-2);border-radius:8px">
@@ -1960,7 +1960,7 @@ document.addEventListener("click", async event => {
     "[data-tc-add],[data-tc-remove],[data-tc-decline],[data-tc-confirm]," +
     "[data-settle-id],[data-action],[data-remove-quick],[data-quick-collect]," +
     "[data-inv-edit],[data-inv-delete],[data-remove-qitem],[data-add-qprice]," +
-    "[data-remove-qprice],[data-qitem-name],[data-pick-price]"
+    "[data-remove-qprice],[data-qitem-name],[data-pick-price],[data-view-ticket]"
   );
   if (!el) return;
 
@@ -2104,7 +2104,7 @@ if (el.dataset.action === "save-quick-comps") {
     const note       = document.getElementById("td-note")?.value || "";
     const updates    = { status: newStatus, update_note: note };
     if (actualQuote > 0) updates.actual_quote = actualQuote;
-    const { error } = await sb.from("repair_tickets")
+    const { error } = await sb.from("tickets")
       .update(updates).eq("id", ticketId);
     if (error) { alert("Update failed: " + error.message); return; }
     state.modal = null;
@@ -2119,63 +2119,24 @@ if (el.dataset.action === "save-quick-comps") {
     if (idx >= 0) sel.splice(idx, 1);
     else sel.push({ name, tag: "Repaired", price: 0 });
     state.modal.selectedComponents = sel;
-    // Toggle button style without full render
-    el.classList.toggle("primary-button",   idx < 0);
-    el.classList.toggle("secondary-button", idx >= 0);
-    el.textContent = idx >= 0 ? name : name + " ✓";
-    // Rebuild only the selected-components list
-    const tags = ["Repaired","Replaced","New","Cleaned","Checked"];
-    const listEl = document.getElementById("repair-sel-list");
-    const wrapper = listEl || document.createElement("div");
-    wrapper.id = "repair-sel-list";
-    wrapper.style.cssText = "display:grid;gap:6px;margin-bottom:10px";
-    wrapper.innerHTML = sel.map((s, i) => `
-      <div style="display:flex;align-items:center;gap:8px;padding:8px;
-                  background:var(--surface-2);border-radius:8px">
-        <strong style="flex:1">${s.name}</strong>
-        <select data-comp-tag="${i}"
-          style="border:1px solid var(--border);border-radius:6px;
-                 padding:5px 8px;background:var(--surface);color:var(--text)">
-          ${tags.map(t => `<option ${t === s.tag ? "selected" : ""}>${t}</option>`).join("")}
-        </select>
-        <button type="button" data-remove-comp="${i}"
-          style="color:var(--danger);background:none;border:none;
-                 font-size:20px;line-height:1;padding:0 4px">×</button>
-      </div>`).join("");
-    if (!listEl) {
-      // Insert before the modalActions row
-      const form = document.querySelector("[data-form='repair']");
-      const actions = form?.querySelector(".modal-actions");
-      if (actions) form.insertBefore(wrapper, actions);
+    // Save typed field values so render() doesn't wipe them
+    const form = document.querySelector("[data-form='repair']");
+    if (form) {
+      const fd = new FormData(form);
+      state.modal._draft = Object.fromEntries(fd.entries());
     }
-    return;
+    render(); return;
   }
   if (el.dataset.removeComp !== undefined) {
     const sel = state.modal.selectedComponents || [];
     sel.splice(Number(el.dataset.removeComp), 1);
     state.modal.selectedComponents = sel;
-    const tags = ["Repaired","Replaced","New","Cleaned","Checked"];
-    const listEl = document.getElementById("repair-sel-list");
-    if (listEl) {
-      listEl.innerHTML = sel.map((s, i) => `
-        <div style="display:flex;align-items:center;gap:8px;padding:8px;
-                    background:var(--surface-2);border-radius:8px">
-          <strong style="flex:1">${s.name}</strong>
-          <select data-comp-tag="${i}"
-            style="border:1px solid var(--border);border-radius:6px;
-                   padding:5px 8px;background:var(--surface);color:var(--text)">
-            ${tags.map(t => `<option ${t === s.tag ? "selected" : ""}>${t}</option>`).join("")}
-          </select>
-          <button type="button" data-remove-comp="${i}"
-            style="color:var(--danger);background:none;border:none;
-                   font-size:20px;line-height:1;padding:0 4px">×</button>
-        </div>`).join("");
-      if (sel.length === 0) listEl.remove();
+    const form = document.querySelector("[data-form='repair']");
+    if (form) {
+      const fd = new FormData(form);
+      state.modal._draft = Object.fromEntries(fd.entries());
     }
-    // Also un-highlight the button
-    const btn = document.querySelector(`[data-comp="${sel[Number(el.dataset.removeComp)]?.name}"]`);
-    if (btn) { btn.classList.replace("primary-button","secondary-button"); }
-    return;
+    render(); return;
   }
 
   // ── Ticket checkout: add component inline ────────────────────────
@@ -2184,21 +2145,27 @@ if (el.dataset.action === "save-quick-comps") {
     if (!name) return;
     const ticket = state.data.tickets.find(t => String(t.id) === String(state.modal?.id));
     if (ticket) {
-      // Save existing prices from inputs before rebuilding
-      const priceEls = document.querySelectorAll("[data-tc-price]");
-      const comps = [...(ticket.components_noted || [])];
-      priceEls.forEach((inp, i) => { if (comps[i]) comps[i].price = Number(inp.value) || 0; });
-      comps.push({ name, condition: "New", price: 0 });
-      ticket.components_noted = comps;
+      // Read current prices from DOM inputs and write them back FIRST
+      document.querySelectorAll("[data-tc-price]").forEach((inp, i) => {
+        if (ticket.components_noted[i]) ticket.components_noted[i].price = Number(inp.value) || 0;
+      });
+      // Also save labour so it survives re-render
+      const labourEl = document.getElementById("tc-labour");
+      if (labourEl) state.cartLabour = Number(labourEl.value) || 0;
+      ticket.components_noted = [...ticket.components_noted, { name, condition: "New", price: 0 }];
     }
     render(); return;
   }
   if (el.dataset.tcRemove !== undefined) {
     const ticket = state.data.tickets.find(t => String(t.id) === String(state.modal?.id));
     if (ticket) {
-      const comps = [...(ticket.components_noted || [])];
-      comps.splice(Number(el.dataset.tcRemove), 1);
-      ticket.components_noted = comps;
+      // Save current prices before removing
+      document.querySelectorAll("[data-tc-price]").forEach((inp, i) => {
+        if (ticket.components_noted[i]) ticket.components_noted[i].price = Number(inp.value) || 0;
+      });
+      const labourEl = document.getElementById("tc-labour");
+      if (labourEl) state.cartLabour = Number(labourEl.value) || 0;
+      ticket.components_noted.splice(Number(el.dataset.tcRemove), 1);
     }
     render(); return;
   }
