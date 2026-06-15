@@ -871,9 +871,9 @@ function pos() {
               .map(t => `
                 <div class="list-row" style="margin-bottom:6px">
                   <div>
-                    <strong>${t.ticket_number}</strong>
+                    <strong>${t.customer_name}</strong>
                     <span class="badge warn" style="margin-left:6px">${t.status}</span><br>
-                    <small class="muted">${t.customer_name} · ${t.device_brand} ${t.device_model}</small>
+                    <small class="muted">${t.ticket_number} · ${t.device_brand} ${t.device_model}</small>
                   </div>
                   <button class="primary-button" style="font-size:12px;padding:6px 10px"
                     data-quick-collect="${t.id}">Collect</button>
@@ -1091,7 +1091,7 @@ function dashboard() {
 
 function repairs() {
   const rows = (state.data.tickets || [])
-    .filter(t => (`${t.ticket_number} ${t.customer_name} ${t.device_model} ${t.status}`)
+    .filter(t => (`${t.customer_name} ${t.ticket_number} ${t.device_model} ${t.device_brand} ${t.status} ${t.customer_phone}`)
       .toLowerCase().includes(state.filter.toLowerCase()));
   const tenant = currentTenant();
   const statusColors = {
@@ -1101,7 +1101,7 @@ function repairs() {
   return `
     ${tit("Repair Tickets","Full repair queue with status tracking.",
       `<button class="primary-button" data-modal="repair">New Ticket</button>`)}
-    ${tlb("Search tickets, customer, device…","repair","")}
+    ${tlb("Search by customer name, device, ticket…","repair","")}
     <div class="grid two-col">
       <div class="card">
         <div class="table-wrap"><table>
@@ -1111,9 +1111,9 @@ function repairs() {
           </tr></thead>
           <tbody>
             ${rows.length ? rows.map(r => `<tr style="cursor:pointer" data-view-ticket="${r.id}">
-              <td><strong style="color:var(--primary)">${r.ticket_number}</strong></td>
-              <td>${r.customer_name}<br>
-                <small class="muted">${r.customer_phone}</small></td>
+              <td><strong>${r.customer_name}</strong><br>
+              <small class="muted">${r.customer_phone}</small></td>
+               <td><span style="color:var(--primary);font-size:12px">${r.ticket_number}</span></td>
               <td>${r.device_brand} ${r.device_model}<br>
                 <small class="muted">${r.imei||""}</small></td>
               <td>${Number(r.advance_payment||0) > 0
