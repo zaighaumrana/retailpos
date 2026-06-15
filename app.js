@@ -87,7 +87,8 @@ async function loadConfig() {
 // ── Load all operational data ──────────────────────────────────────
 async function load() {
   await loadConfig();
-  const fetchInventory = CFG.inventory_module_enabled
+  // CFG is now fresh — read inventory_module_enabled after loadConfig()
+  const fetchInventory = CFG.inventory_module_enabled === true
     ? sb.from("inventory").select("*").order("name")
     : Promise.resolve({ data: [] });
 
@@ -1166,7 +1167,13 @@ function repairs() {
                 ? money(r.advance_payment, tenant.currency) : "—"}</td>
               <td><span class="badge ${statusColors[r.status]||"warn"}">
                 ${r.status}</span></td>
-              <td>
+              <td style="display:flex;gap:6px;align-items:center">
+                ${CFG.technician_module_enabled !== false ? `
+                <button class="secondary-button"
+                  data-action="open-ticket-editor"
+                  data-ticket-id="${r.id}"
+                  style="font-size:12px"
+                  onclick="event.stopPropagation()">Edit</button>` : ""}
                 <button class="secondary-button"
                   data-action="add-ticket-to-cart"
                   style="font-size:12px"
@@ -1809,6 +1816,70 @@ function modal() {
 
         // ── Employee add/edit ───────────────────────────────────────────
     employee: (() => {
+      if (state.modal?.type === "ticket-editor") {
+    const tk = state.data.tickets.find(t => String(t.id) === String(state.modal.id));
+    if (!tk) return "";
+    const comps = tk.components_noted || [];
+    const partsTotal  = comps.reduce((s, c) => s + Number(c.price || 0), 0);
+    const labourVal   = state.teLabour ?? Number(tk.estimated_quote - partsTotal) ?? 0;
+    const grandTotal  = partsTotal + (isNaN(labourVal) ? 0 : labourVal);
+    return `<div class="modal-backdrop" data-close>
+      <div class="modal" style="max-width:500px;max-height:85vh;overflow-y:auto"
+           onclick="event.stopPropagation()">
+        <h2 style="margin-bottom:4px">${tk.customer_name}</h2>
+        <p class="muted" style="font-size:13px;margin-bottom:16px">
+          ${tk.ticket_number} · ${tk.device_brand} ${tk.device_model}
+        </p>
+        <div style="display:grid;gap:8px;margin-bottom:14px">
+          <strong style="font-size:13px">Components</strong>
+          ${comps.map((c, i) => `
+            <div style="display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center">
+              <span style="font-size:13px">${c.name}
+                <small class="muted">(${c.condition})</small></span>
+              <input type="number" min="0"
+                id="te-price-${i}"
+                value="${c.price || 0}"
+                style="width:100px;border:1px solid var(--border);border-radius:6px;
+                       padding:5px 8px;background:var(--surface);color:var(--text);font-size:13px"
+                data-te-price="${i}">
+              <button type="button" data-te-remove="${i}"
+                style="color:var(--danger);background:none;border:none;
+                       font-size:18px;cursor:pointer;padding:0 4px">×</button>
+            </div>`).join("")}
+          ${comps.length === 0 ? `<p class="muted" style="font-size:13px">No components yet.</p>` : ""}
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:16px">
+          <input id="te-new-comp" class="search" placeholder="Component name" style="flex:1">
+          <select id="te-new-cond"
+            style="border:1px solid var(--border);border-radius:6px;padding:7px 9px;
+                   background:var(--surface);color:var(--text);font-size:13px">
+            ${["Repaired","Replaced","New","Cleaned","Checked"].map(c =>
+              `<option>${c}</option>`).join("")}
+          </select>
+          <button type="button" class="secondary-button" data-action="te-add-comp">+ Add</button>
+        </div>
+        <label style="display:flex;justify-content:space-between;align-items:center;
+                      padding:10px;background:var(--surface-2);border-radius:8px;
+                      margin-bottom:8px;gap:12px">
+          <span style="font-size:13px;font-weight:500">Labour Charge</span>
+          <input type="number" min="0" id="te-labour" value="${labourVal < 0 ? 0 : labourVal}"
+            style="width:110px;border:1px solid var(--border);border-radius:6px;
+                   padding:5px 8px;background:var(--surface);color:var(--text);font-size:13px"
+            data-te-labour>
+        </label>
+        <div style="display:flex;justify-content:space-between;font-weight:600;
+                    padding:10px;background:var(--surface-2);border-radius:8px;margin-bottom:16px">
+          <span>Updated Quote</span>
+          <span id="te-total">${money(grandTotal, CFG.currency)}</span>
+        </div>
+        <div class="modal-actions">
+          <button class="secondary-button" data-close>Cancel</button>
+          <button class="primary-button" data-action="te-save">Save to Ticket</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
       if (state.modal?.type === "edit-employee") {
         const e = state.modal;
         return `<form class="modal" data-form="edit-employee" style="max-width:420px" data-emp-id="${e.id}">
@@ -2185,6 +2256,63 @@ if (el.dataset.action === "save-quick-comps") {
     render(); return;
   }
 
+  if (el.dataset.action === "open-ticket-editor") {
+    const ticketId = el.dataset.ticketId;
+    const tk = state.data.tickets.find(t => String(t.id) === String(ticketId));
+    if (!tk) return;
+    const partsTotal = (tk.components_noted || []).reduce((s,c) => s + Number(c.price||0), 0);
+    state.teLabour = Math.max(0, Number(tk.estimated_quote || 0) - partsTotal);
+    state.modal = { type: "ticket-editor", id: ticketId };
+    render(); return;
+  }
+  // ── Ticket Editor: add component ─────────────────────────────────
+  if (el.dataset.action === "te-add-comp") {
+    const name = document.getElementById("te-new-comp")?.value?.trim();
+    const cond = document.getElementById("te-new-cond")?.value || "New";
+    if (!name) return;
+    const tk = state.data.tickets.find(t => String(t.id) === String(state.modal?.id));
+    if (!tk) return;
+    // snapshot current prices before re-render
+    document.querySelectorAll("[data-te-price]").forEach((inp, i) => {
+      if (tk.components_noted[i]) tk.components_noted[i].price = Number(inp.value) || 0;
+    });
+    state.teLabour = Number(document.getElementById("te-labour")?.value || 0);
+    tk.components_noted = [...tk.components_noted, { name, condition: cond, price: 0 }];
+    render(); return;
+  }
+
+  // ── Ticket Editor: remove component ──────────────────────────────
+  if (el.dataset.teRemove !== undefined) {
+    const tk = state.data.tickets.find(t => String(t.id) === String(state.modal?.id));
+    if (!tk) return;
+    document.querySelectorAll("[data-te-price]").forEach((inp, i) => {
+      if (tk.components_noted[i]) tk.components_noted[i].price = Number(inp.value) || 0;
+    });
+    state.teLabour = Number(document.getElementById("te-labour")?.value || 0);
+    tk.components_noted.splice(Number(el.dataset.teRemove), 1);
+    render(); return;
+  }
+
+  // ── Ticket Editor: save to Supabase ──────────────────────────────
+  if (el.dataset.action === "te-save") {
+    const tk = state.data.tickets.find(t => String(t.id) === String(state.modal?.id));
+    if (!tk) return;
+    document.querySelectorAll("[data-te-price]").forEach((inp, i) => {
+      if (tk.components_noted[i]) tk.components_noted[i].price = Number(inp.value) || 0;
+    });
+    const labour     = Number(document.getElementById("te-labour")?.value || 0);
+    const partsTotal = tk.components_noted.reduce((s, c) => s + Number(c.price || 0), 0);
+    const newQuote   = partsTotal + labour;
+    const { error }  = await sb.from("tickets").update({
+      components_noted: tk.components_noted,
+      estimated_quote:  newQuote,
+    }).eq("id", tk.id);
+    if (error) { alert("Save failed: " + error.message); return; }
+    tk.estimated_quote = newQuote;
+    state.teLabour = null;
+    state.modal    = null;
+    await load(); return;
+  }
   if (el.dataset.action === "toggle-receipt") {
     const id = Number(el.dataset.receiptId);
     state.receiptsExpanded = state.receiptsExpanded === id ? null : id;
@@ -2507,6 +2635,14 @@ if (el.dataset.action === "save-quick-comps") {
 document.addEventListener("input", event => {
   if (event.target.dataset.filter) {
     state.filter = event.target.value; render();
+  }
+// Ticket editor live total
+  if (event.target.dataset.tePrice !== undefined || event.target.dataset.teLabour !== undefined) {
+    const prices = [...document.querySelectorAll("[data-te-price]")]
+      .reduce((s, inp) => s + (Number(inp.value) || 0), 0);
+    const labour = Number(document.getElementById("te-labour")?.value || 0);
+    const totalEl = document.getElementById("te-total");
+    if (totalEl) totalEl.textContent = money(prices + labour, CFG.currency);
   }
 });
 
