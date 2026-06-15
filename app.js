@@ -31,8 +31,20 @@ const state = {
   udharPhone:      "",
 };
 
-// ── Session (employee logged in via PIN) ──
-let SESSION = { employee: null, loginSkipped: false };
+// ── Session (persisted in sessionStorage — clears on tab close) ──
+function _loadSession() {
+  try {
+    const s = sessionStorage.getItem("retailos_session");
+    return s ? JSON.parse(s) : { employee: null, isAdmin: false, loginSkipped: false };
+  } catch { return { employee: null, isAdmin: false, loginSkipped: false }; }
+}
+function _saveSession() {
+  try { sessionStorage.setItem("retailos_session", JSON.stringify(SESSION)); } catch {}
+}
+function _clearSession() {
+  try { sessionStorage.removeItem("retailos_session"); } catch {}
+}
+let SESSION = _loadSession();
 
 // ── Config cache (from shop_config table) ──
 let CFG = {
@@ -49,6 +61,8 @@ let CFG = {
   secondary_color:      "#e9b949",
   currency:             "Rs.",
   tax_rate:             0,
+  inventory_module_enabled: false,
+  repair_module_enabled:    true,
 };
 
 function uid(p) { return `${p}-${Math.random().toString(36).slice(2,7).toUpperCase()}`; }
@@ -256,10 +270,6 @@ function loginScreen() {
               style="font-size:22px;min-height:58px;border-radius:8px"
               data-pin-key="${k}">${k}</button>`).join("")}
         </div>
-        <button class="secondary-button" data-action="skip-login"
-          style="font-size:13px;color:var(--muted)">
-          Continue without login
-        </button>
       </div>
     </div>`;
 }
@@ -284,11 +294,29 @@ function handlePinKey(key) {
 }
 
 async function submitPin() {
-  const res = await verifyPin(pinBuffer);
-  pinBuffer  = "";
+  const entered = pinBuffer;
+  pinBuffer = "";
+
+  // 1. Check admin password first
+  if (String(entered) === String(CFG.admin_password)) {
+    SESSION = { employee: { name: "Admin", role: "Business Owner" }, isAdmin: true, loginSkipped: false };
+    state.role = "Business Owner";
+    _saveSession();
+    render();
+    return;
+  }
+
+  // 2. Check employee PIN
+  const res = await verifyPin(entered);
   if (res.ok) {
-    SESSION.employee    = res.employee;
-    SESSION.loginSkipped = false;
+    SESSION = { employee: res.employee, isAdmin: false, loginSkipped: false };
+    // Route by role
+    const role = res.employee.role;
+    state.role = role;
+    if (role === "Cashier" || role === "Technician") {
+      state.route = "pos";
+    }
+    _saveSession();
     render();
   } else {
     const errEl   = document.getElementById("pin-error");
@@ -567,11 +595,14 @@ function buildReturnSlip(data) {
    RENDER
 ═══════════════════════════════════════════════════════════════════ */
 function render() {
-  // Login gate
-  if (CFG.strict_login_mode && !SESSION.employee && !SESSION.loginSkipped) {
+  // ── Gateway: always require login ──
+  if (!SESSION.employee && !SESSION.loginSkipped) {
     document.getElementById("app").innerHTML = loginScreen();
     return;
   }
+  // Restore role from session on every render
+  if (SESSION.employee?.role) state.role = SESSION.employee.role;
+  if (SESSION.isAdmin) state.role = "Business Owner";
   const active = document.activeElement;
   const focusInfo = active?.dataset?.filter ? { filter:active.dataset.filter, start:active.selectionStart, end:active.selectionEnd } : null;
   const app    = document.getElementById("app");
@@ -599,9 +630,10 @@ function render() {
             ${state.route==="admin"?`<select class="tenant-switcher compact-select" data-action="admin-module">${ADMIN_MODULES.filter(([k])=>can(k)).map(([k,,l])=>`<option value="${k}" ${k===state.adminModule?"selected":""}>${l}</option>`).join("")}</select>`:""}
             <span class="chip"><i class="dot ${state.online?(state.syncing?"syncing":""):"offline"}"></i>${state.online?(state.syncing?"Syncing":"Online"):"Offline"}</span>
             ${can("pos") ?`<button class="${state.route==="pos"?"primary-button":"secondary-button"}" data-route="pos">POS</button>`:""}
-            ${can("dashboard")||can("inventory")?`<button class="${state.route==="admin"?"primary-button":"secondary-button"}" data-route="admin">Admin</button>`:""}
+            ${(SESSION.isAdmin || (can("dashboard")||can("inventory")) && !["Cashier","Technician"].includes(state.role))?`<button class="${state.route==="admin"?"primary-button":"secondary-button"}" data-route="admin">Admin</button>`:""}
             ${state.installPrompt?`<button class="icon-button" data-action="install">Install</button>`:""}
             <button class="icon-button" data-action="theme">${state.theme==="dark"?"Light":"Dark"}</button>
+            <button class="icon-button" data-action="logout" style="color:var(--danger)">Logout</button>
           </div>
         </header>
         <section class="content">${pageContent()}</section>
@@ -1847,13 +1879,6 @@ async function checkout() {
     return;
   }
   // Login-at-checkout gate
-  if (CFG.strict_login_mode && !SESSION.employee && !SESSION.loginSkipped) {
-    openPinPrompt("checkout", (pin, emp) => {
-      SESSION.employee = emp;
-      doCheckout();
-    });
-    return;
-  }
   doCheckout();
 }
 
@@ -2022,7 +2047,15 @@ if (el.dataset.action === "save-quick-comps") {
     handlePinKey(el.dataset.pinKey); return;
   }
   if (el.dataset.action === "skip-login") {
-    SESSION.loginSkipped = true; render(); return;
+    return; // disabled — login is now mandatory
+  }
+  if (el.dataset.action === "logout") {
+    if (!confirm("Log out of RetailOS?")) return;
+    _clearSession();
+    SESSION = { employee: null, isAdmin: false, loginSkipped: false };
+    state.role = "Business Owner";
+    state.route = "pos";
+    render(); return;
   }
 
   // ── PIN prompt pad ───────────────────────────────────────────────
