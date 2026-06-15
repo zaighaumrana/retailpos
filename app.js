@@ -697,6 +697,7 @@ function settings() {
       <button class="settings-tab ${state.settingsTab==="receipt"?"active":""}" data-settings-tab="receipt">Receipt & Tax</button>
       <button class="settings-tab ${state.settingsTab==="components"?"active":""}" data-settings-tab="components">Repair Components</button>
       <button class="settings-tab ${state.settingsTab==="quickitems"?"active":""}" data-settings-tab="quickitems">Quick Items</button>
+      <button class="settings-tab ${state.settingsTab==="staff"?"active":""}" data-settings-tab="staff">Staff & Security</button>
     </div>
     ${settingsTabContent()}
   `;
@@ -810,7 +811,50 @@ function settingsTabContent() {
         </button>
       </div>`;
   }
-  return "";;
+  if (state.settingsTab === "staff") {
+    const emps = state.data.employees || [];
+    return `
+      <div style="display:grid;gap:16px">
+        <div class="card" style="display:grid;gap:14px">
+          <h2>Employees</h2>
+          ${emps.length ? `
+            <div class="table-wrap"><table>
+              <thead><tr>
+                <th>Name</th><th>Role</th><th>Status</th><th>PIN</th><th></th>
+              </tr></thead>
+              <tbody>
+                ${emps.map(e => `<tr>
+                  <td><strong>${e.name}</strong></td>
+                  <td>${e.role}</td>
+                  <td><span class="badge ${e.status==="Active"?"good":"bad"}">${e.status}</span></td>
+                  <td><span class="muted">••••</span></td>
+                  <td>
+                    <button class="secondary-button" style="font-size:12px"
+                      data-action="edit-employee" data-emp-id="${e.id}"
+                      data-emp-name="${e.name}" data-emp-role="${e.role}"
+                      data-emp-status="${e.status}">Edit</button>
+                  </td>
+                </tr>`).join("")}
+              </tbody>
+            </table></div>` : `<p class="muted">No employees yet.</p>`}
+          <button class="primary-button" style="width:fit-content" data-modal="employee">+ Add Employee</button>
+        </div>
+        <div class="card" style="display:grid;gap:14px">
+          <h2>Change Admin Password</h2>
+          <p class="muted" style="font-size:13px">Used to access Admin panel and settings.</p>
+          <form class="form-grid" data-form="change-admin-password">
+            <label class="field"><span>Current Password</span>
+              <input name="current" type="password" autocomplete="off" required></label>
+            <label class="field"><span>New Password</span>
+              <input name="newpass" type="password" autocomplete="off" required></label>
+            <div class="modal-actions" style="grid-column:1/-1">
+              <button class="primary-button">Update Password</button>
+            </div>
+          </form>
+        </div>
+      </div>`;
+  }
+  return "";
 }
 
 /* ── Branding modal (quick access from topbar — removed, now in settings page only) ── */
@@ -1712,6 +1756,34 @@ function modal() {
 
     // ── Employee add/edit ───────────────────────────────────────────
     employee: `
+      if (state.modal?.type === "edit-employee") {
+    const e = state.modal;
+    return `<div class="modal-backdrop" data-close>
+      <form class="modal" data-form="edit-employee" style="max-width:420px" data-emp-id="${e.id}">
+        <h2>Edit Employee</h2>
+        <div class="form-grid">
+          <label class="field"><span>Name</span>
+            <input name="name" value="${e.name}" required></label>
+          <label class="field"><span>New PIN (leave blank to keep)</span>
+            <input name="pin_code" type="password" autocomplete="off" maxlength="6" placeholder="••••"></label>
+          <label class="field"><span>Role</span>
+            <select name="role">
+              ${["Business Owner","Manager","Cashier","Technician"].map(r =>
+                `<option ${r===e.role?"selected":""}>${r}</option>`).join("")}
+            </select></label>
+          <label class="field"><span>Status</span>
+            <select name="status">
+              <option ${e.status==="Active"?"selected":""}>Active</option>
+              <option ${e.status==="Inactive"?"selected":""}>Inactive</option>
+            </select></label>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="secondary-button" data-close>Cancel</button>
+          <button class="primary-button">Save Changes</button>
+        </div>
+      </form>
+    </div>`;
+  }
       <form class="modal" data-form="employee" style="max-width:440px">
         <h2>Add Employee</h2>
         <p class="muted" style="font-size:13px">Admin PIN will be required to save.</p>
@@ -2048,6 +2120,16 @@ if (el.dataset.action === "save-quick-comps") {
   }
   if (el.dataset.action === "skip-login") {
     return; // disabled — login is now mandatory
+  }
+  if (el.dataset.action === "edit-employee") {
+    state.modal = {
+      type:   "edit-employee",
+      id:     el.dataset.empId,
+      name:   el.dataset.empName,
+      role:   el.dataset.empRole,
+      status: el.dataset.empStatus,
+    };
+    render(); return;
   }
   if (el.dataset.action === "logout") {
     if (!confirm("Log out of RetailOS?")) return;
@@ -2465,6 +2547,28 @@ document.addEventListener("submit", async event => {
   }
 
   // ── Employee save (requires admin PIN) ───────────────────────────
+  if (type === "edit-employee") {
+    const empId = form.dataset.empId;
+    const updates = { name: data.name, role: data.role, status: data.status };
+    if (data.pin_code?.trim()) updates.pin_code = String(data.pin_code.trim());
+    const { error } = await sb.from("employees").update(updates).eq("id", empId);
+    if (error) { alert("Error updating employee: " + error.message); return; }
+    state.modal = null;
+    await load(); return;
+  }
+
+  if (type === "change-admin-password") {
+    if (data.current !== CFG.admin_password) {
+      alert("Current password is incorrect."); return;
+    }
+    if (!data.newpass?.trim()) { alert("New password cannot be empty."); return; }
+    const { error } = await sb.from("shop_config").update({ admin_password: data.newpass }).eq("id", 1);
+    if (error) { alert("Error updating password: " + error.message); return; }
+    CFG.admin_password = data.newpass;
+    alert("Admin password updated successfully.");
+    return;
+  }
+  
   if (type === "employee") {
     openPinPrompt("admin", async () => {
       const { error } = await sb.from("employees").insert({
