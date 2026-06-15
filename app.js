@@ -156,8 +156,8 @@ function scoped(store) {
 
 /* ── Role-based access ──────────────────────────────────────────── */
 const ACCESS = {
-  "Business Owner": ["dashboard","repairs","inventory","reports","employees","settings","pos"],
-  "Manager":        ["dashboard","repairs","inventory","reports","pos"],
+  "Business Owner": ["dashboard","repairs","inventory","reports","receipts","employees","settings","pos"],
+  "Manager":        ["dashboard","repairs","inventory","reports","receipts","pos"],
   "Cashier":        ["pos"],
   "Technician":     ["repairs","pos"],
 };
@@ -174,7 +174,9 @@ const ADMIN_MODULES = [
   ["inventory", "▤", "Inventory"],
   ["reports",   "▧", "Reports"],
   ["employees", "♙", "Employees"],
+  ["receipts",  "◉", "Receipts"],
   ["settings",  "◐", "Settings"],
+];
 ];
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -655,6 +657,7 @@ function pageContent() {
     inventory,
     reports,
     employees,
+    receipts,
     settings,
   };
   if (!can(state.adminModule)) state.adminModule = "dashboard";
@@ -1301,6 +1304,57 @@ function employees() {
     </div>`;
 }
 
+function receipts() {
+  const sales = (state.data.sales || []);
+  const filtered = sales.filter(s =>
+    (`${s.customer_name} ${s.payment_method} ${s.employee_name}`)
+      .toLowerCase().includes(state.filter.toLowerCase())
+  );
+  const expanded = state.receiptsExpanded || null;
+  return `
+    ${tit("Receipts Archive","Full log of all completed sales and invoices.","")}
+    ${tlb("Search by customer, payment method…","receipts","")}
+    <div class="card" style="display:grid;gap:0">
+      ${filtered.length ? filtered.map(s => {
+        const isOpen = expanded === s.id;
+        const items  = Array.isArray(s.items_sold) ? s.items_sold : [];
+        return `
+          <div style="border-bottom:1px solid var(--border);padding:12px 4px">
+            <div style="display:flex;justify-content:space-between;align-items:center;
+                        cursor:pointer;gap:12px" data-action="toggle-receipt" data-receipt-id="${s.id}">
+              <div style="display:grid;gap:2px">
+                <strong>${s.customer_name || "Walk-in"}</strong>
+                <span class="muted" style="font-size:12px">
+                  INV-${s.id} · ${s.payment_method} · ${s.employee_name || ""}
+                </span>
+              </div>
+              <div style="text-align:right;flex-shrink:0">
+                <div><strong>${money(s.total_bill, CFG.currency)}</strong></div>
+                <span class="muted" style="font-size:11px">
+                  ${new Date(s.created_at).toLocaleDateString()} ${new Date(s.created_at).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}
+                </span>
+              </div>
+            </div>
+            ${isOpen ? `
+              <div style="margin-top:10px;padding:10px;background:var(--surface-2);
+                          border-radius:8px;display:grid;gap:6px">
+                ${items.length ? items.map(i => `
+                  <div style="display:flex;justify-content:space-between;font-size:13px">
+                    <span>${i.name || i.productName || "Item"} × ${i.qty || 1}</span>
+                    <span>${money((i.soldPrice || i.price || 0) * (i.qty || 1), CFG.currency)}</span>
+                  </div>`).join("") : `<span class="muted" style="font-size:13px">No item breakdown available.</span>`}
+                <div style="border-top:1px solid var(--border);margin-top:4px;padding-top:6px;
+                            display:flex;justify-content:space-between;font-size:13px">
+                  ${s.discount > 0 ? `<span>Discount</span><span>- ${money(s.discount, CFG.currency)}</span>` : ""}
+                </div>
+                <div style="display:flex;justify-content:space-between;font-weight:600">
+                  <span>Total</span><span>${money(s.total_bill, CFG.currency)}</span>
+                </div>
+              </div>` : ""}
+          </div>`;
+      }).join("") : `<div class="empty" style="padding:24px;text-align:center;color:var(--muted)">No sales found.</div>`}
+    </div>`;
+}
 
 function inventory() {
   const tenant = currentTenant();
@@ -2131,6 +2185,13 @@ if (el.dataset.action === "save-quick-comps") {
     };
     render(); return;
   }
+
+  if (el.dataset.action === "toggle-receipt") {
+    const id = Number(el.dataset.receiptId);
+    state.receiptsExpanded = state.receiptsExpanded === id ? null : id;
+    render(); return;
+  }
+  
   if (el.dataset.action === "logout") {
     if (!confirm("Log out of RetailOS?")) return;
     _clearSession();
@@ -2568,7 +2629,7 @@ document.addEventListener("submit", async event => {
     alert("Admin password updated successfully.");
     return;
   }
-  
+
   if (type === "employee") {
     openPinPrompt("admin", async () => {
       const { error } = await sb.from("employees").insert({
