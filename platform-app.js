@@ -369,6 +369,21 @@ function pageClientDetail() {
                       align-items:center;padding:10px;
                       background:var(--surface-2);border-radius:8px">
             <div>
+              <strong>Technician Module</strong>
+              <p class="muted" style="font-size:12px;margin:2px 0 0">
+                Ticket editor for technicians
+              </p>
+            </div>
+            <button class="${cfg.technician_module_enabled
+              ? "danger-button" : "primary-button"}"
+              data-p-action="toggle-technician" style="min-width:80px">
+              ${cfg.technician_module_enabled ? "Disable" : "Enable"}
+            </button>
+          </div>
+          <div style="display:flex;justify-content:space-between;
+                      align-items:center;padding:10px;
+                      background:var(--surface-2);border-radius:8px">
+            <div>
               <strong>Subscription Status</strong>
             </div>
             <button class="${c.status === "Active"
@@ -664,6 +679,18 @@ document.addEventListener("click", async event => {
     return;
   }
 
+  if (action === "toggle-technician") {
+    const cfg = pState.clientData.config || {};
+    const next = !cfg.technician_module_enabled;
+    const ok = await updateClientConfig(pState.selectedClient, {
+      technician_module_enabled: next,
+    });
+    if (ok) {
+      pState.clientData.config.technician_module_enabled = next;
+      render();
+    }
+    return;
+  }
   if (action === "resolve-ticket") {
     const { error } = await pb.from("support_tickets")
       .update({ status: "Resolved", resolved_at: new Date().toISOString() })
