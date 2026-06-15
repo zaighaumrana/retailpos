@@ -177,7 +177,6 @@ const ADMIN_MODULES = [
   ["receipts",  "◉", "Receipts"],
   ["settings",  "◐", "Settings"],
 ];
-];
 
 /* ═══════════════════════════════════════════════════════════════════
    SUPABASE OPERATIONS
@@ -1808,52 +1807,52 @@ function modal() {
       </div>`;
     })(),
 
-    // ── Employee add/edit ───────────────────────────────────────────
-    employee: `
+        // ── Employee add/edit ───────────────────────────────────────────
+    employee: (() => {
       if (state.modal?.type === "edit-employee") {
-    const e = state.modal;
-    return `<div class="modal-backdrop" data-close>
-      <form class="modal" data-form="edit-employee" style="max-width:420px" data-emp-id="${e.id}">
-        <h2>Edit Employee</h2>
-        <div class="form-grid">
-          <label class="field"><span>Name</span>
-            <input name="name" value="${e.name}" required></label>
-          <label class="field"><span>New PIN (leave blank to keep)</span>
-            <input name="pin_code" type="password" autocomplete="off" maxlength="6" placeholder="••••"></label>
-          <label class="field"><span>Role</span>
-            <select name="role">
-              ${["Business Owner","Manager","Cashier","Technician"].map(r =>
-                `<option ${r===e.role?"selected":""}>${r}</option>`).join("")}
-            </select></label>
-          <label class="field"><span>Status</span>
-            <select name="status">
-              <option ${e.status==="Active"?"selected":""}>Active</option>
-              <option ${e.status==="Inactive"?"selected":""}>Inactive</option>
-            </select></label>
-        </div>
-        <div class="modal-actions">
-          <button type="button" class="secondary-button" data-close>Cancel</button>
-          <button class="primary-button">Save Changes</button>
-        </div>
-      </form>
-    </div>`;
-  }
-      <form class="modal" data-form="employee" style="max-width:440px">
-        <h2>Add Employee</h2>
-        <p class="muted" style="font-size:13px">Admin PIN will be required to save.</p>
-        <div class="form-grid">
-          ${fld("Full Name","name")}
-          ${fld("4-digit PIN","pin_code","","number")}
-          <label class="field"><span>Role</span>
-            <select name="role">
-              <option>Cashier</option>
-              <option>Technician</option>
-              <option>Admin</option>
-            </select>
-          </label>
-        </div>
-        ${modalActions()}
-      </form>`,
+        const e = state.modal;
+        return `<form class="modal" data-form="edit-employee" style="max-width:420px" data-emp-id="${e.id}">
+          <h2>Edit Employee</h2>
+          <div class="form-grid">
+            <label class="field"><span>Name</span>
+              <input name="name" value="${e.name}" required></label>
+            <label class="field"><span>New PIN (leave blank to keep)</span>
+              <input name="pin_code" type="password" autocomplete="off" maxlength="6" placeholder="••••"></label>
+            <label class="field"><span>Role</span>
+              <select name="role">
+                ${["Business Owner","Manager","Cashier","Technician"].map(r =>
+                  `<option ${r===e.role?"selected":""}>${r}</option>`).join("")}
+              </select></label>
+            <label class="field"><span>Status</span>
+              <select name="status">
+                <option ${e.status==="Active"?"selected":""}>Active</option>
+                <option ${e.status==="Inactive"?"selected":""}>Inactive</option>
+              </select></label>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="secondary-button" data-close>Cancel</button>
+            <button class="primary-button">Save Changes</button>
+          </div>
+        </form>`;
+      }
+      return `
+        <form class="modal" data-form="employee" style="max-width:440px">
+          <h2>Add Employee</h2>
+          <p class="muted" style="font-size:13px">Admin PIN will be required to save.</p>
+          <div class="form-grid">
+            ${fld("Full Name","name")}
+            ${fld("4-digit PIN","pin_code","","number")}
+            <label class="field"><span>Role</span>
+              <select name="role">
+                <option>Cashier</option>
+                <option>Technician</option>
+                <option>Admin</option>
+              </select>
+            </label>
+          </div>
+          ${modalActions()}
+        </form>`;
+    })(),
 
     // ── PIN prompt ──────────────────────────────────────────────────
     pinPrompt: pinPromptHTML(state.modal?.purpose),
@@ -2191,7 +2190,7 @@ if (el.dataset.action === "save-quick-comps") {
     state.receiptsExpanded = state.receiptsExpanded === id ? null : id;
     render(); return;
   }
-  
+
   if (el.dataset.action === "logout") {
     if (!confirm("Log out of RetailOS?")) return;
     _clearSession();
