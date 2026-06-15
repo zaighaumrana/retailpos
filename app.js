@@ -1078,8 +1078,8 @@ function repairs() {
             <th>Advance</th><th>Status</th><th></th>
           </tr></thead>
           <tbody>
-            ${rows.length ? rows.map(r => `<tr>
-              <td><strong>${r.ticket_number}</strong></td>
+            ${rows.length ? rows.map(r => `<tr style="cursor:pointer" data-view-ticket="${r.id}">
+              <td><strong style="color:var(--primary)">${r.ticket_number}</strong></td>
               <td>${r.customer_name}<br>
                 <small class="muted">${r.customer_phone}</small></td>
               <td>${r.device_brand} ${r.device_model}<br>
@@ -1091,7 +1091,8 @@ function repairs() {
               <td>
                 <button class="secondary-button"
                   data-action="add-ticket-to-cart"
-                  style="font-size:12px">Collect</button>
+                  style="font-size:12px"
+                  onclick="event.stopPropagation()">Collect</button>
               </td>
             </tr>`).join("") :
             `<tr><td colspan="6" style="text-align:center;color:var(--muted)">
@@ -1315,28 +1316,36 @@ function modal() {
       const comps = CFG.quick_components || [];
       const tags  = ["Repaired","Replaced","New","Cleaned","Checked"];
       const sel   = state.modal?.selectedComponents || [];
+      const d     = state.modal?._draft || {};
+      const fldV  = (label, name, val="", type="text") =>
+        `<label class="field"><span>${label}</span>
+          <input name="${name}" type="${type}"
+            value="${String(val).replace(/"/g,'&quot;')}"
+            placeholder="${label}"
+            style="width:100%;border:1px solid var(--border);border-radius:8px;
+                   padding:8px 12px;background:var(--surface);color:var(--text)">
+        </label>`;
       return `
         <form class="modal" data-form="repair" style="max-width:680px">
           <h2>New Repair Ticket</h2>
           <div class="form-grid">
-            ${fld("Customer Name","customerName")}
-            ${fld("Customer Phone","customerPhone","","tel")}
-            ${fld("Device Brand","deviceBrand")}
-            ${fld("Device Model","deviceModel")}
-            ${fld("IMEI / Serial","imei")}
-            ${fld("Estimated Quote","estimatedQuote","0","number")}
-            ${fld("Advance Received","advance","0","number")}
+            ${fldV("Customer Name","customerName", d.customerName)}
+            ${fldV("Customer Phone","customerPhone", d.customerPhone, "tel")}
+            ${fldV("Device Brand","deviceBrand", d.deviceBrand)}
+            ${fldV("Device Model","deviceModel", d.deviceModel)}
+            ${fldV("IMEI / Serial","imei", d.imei)}
+            ${fldV("Estimated Quote","estimatedQuote", d.estimatedQuote ?? "", "number")}
+            ${fldV("Advance Received","advance", d.advance ?? "", "number")}
             <label class="field"><span>Advance Method</span>
               <select name="advanceMethod">
                 <option value="">None</option>
-                <option>Cash</option><option>Raast</option>
-                <option>JazzCash</option><option>EasyPaisa</option>
-                <option>Bank Transfer</option>
+                ${["Cash","Raast","JazzCash","EasyPaisa","Bank Transfer"].map(m =>
+                  `<option ${d.advanceMethod===m?"selected":""}>${m}</option>`).join("")}
               </select>
             </label>
             <label class="field" style="grid-column:1/-1">
               <span>Technician Note</span>
-              <textarea name="technicianNote" style="min-height:56px"></textarea>
+              <textarea name="technicianNote" style="min-height:56px">${d.technicianNote||""}</textarea>
             </label>
           </div>
           <p class="muted" style="font-size:13px;margin:8px 0 6px">Tap to add issues:</p>
@@ -1366,6 +1375,71 @@ function modal() {
           </div>` : ""}
           ${modalActions()}
         </form>`;
+    })(),
+
+    // ── Ticket Detail — view + update status ────────────────────────
+    ticketDetail: (() => {
+      if (type !== "ticketDetail") return "";
+      const tk = (state.data.tickets || []).find(t => String(t.id) === String(id));
+      if (!tk) return `<div class="modal"><p class="muted">Ticket not found.</p>
+        <div class="modal-actions"><button class="secondary-button" data-close>Close</button></div></div>`;
+      const comps = tk.components_noted || [];
+      const statusColors = { "Pending":"warn","In Progress":"warn","Ready":"good","Delivered":"good","Declined":"bad" };
+      const statuses = ["Pending","In Progress","Evaluated","Ready","Delivered","Declined"];
+      return `
+        <div class="modal" style="max-width:600px">
+          <h2>${tk.ticket_number}
+            <span class="badge ${statusColors[tk.status]||"warn"}" style="margin-left:8px">${tk.status}</span>
+          </h2>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;
+                      font-size:14px;margin-bottom:14px;padding:12px;
+                      background:var(--surface-2);border-radius:8px">
+            <div><span class="muted">Customer</span><br><strong>${tk.customer_name}</strong></div>
+            <div><span class="muted">Phone</span><br><strong>${tk.customer_phone||"—"}</strong></div>
+            <div><span class="muted">Device</span><br><strong>${tk.device_brand} ${tk.device_model}</strong></div>
+            <div><span class="muted">IMEI</span><br><strong>${tk.imei||"—"}</strong></div>
+            <div><span class="muted">Estimated Quote</span><br><strong>${money(tk.estimated_quote||0, tenant.currency)}</strong></div>
+            <div><span class="muted">Advance Paid</span><br><strong>${money(tk.advance_payment||0, tenant.currency)} ${tk.advance_method ? "("+tk.advance_method+")" : ""}</strong></div>
+          </div>
+          ${tk.technician_note ? `
+            <div style="background:color-mix(in srgb,var(--warning) 10%,var(--surface));
+                        border-left:3px solid var(--warning);padding:10px 14px;
+                        border-radius:0 8px 8px 0;margin-bottom:12px;font-size:14px">
+              <strong>Technician Note:</strong> ${tk.technician_note}
+            </div>` : ""}
+          ${comps.length ? `
+            <p class="muted" style="font-size:13px;margin:0 0 6px"><strong>Components:</strong></p>
+            <div style="display:grid;gap:6px;margin-bottom:12px">
+              ${comps.map(c => `
+                <div style="display:flex;justify-content:space-between;align-items:center;
+                            padding:8px 12px;background:var(--surface-2);border-radius:8px;font-size:14px">
+                  <span><strong>${c.name}</strong> <span class="badge warn" style="font-size:11px">${c.condition||""}</span></span>
+                  <span>${c.price > 0 ? money(c.price, tenant.currency) : '<span class="muted">Not priced</span>'}</span>
+                </div>`).join("")}
+            </div>` : `<p class="muted" style="font-size:13px">No components logged yet.</p>`}
+          <div style="border-top:1px solid var(--border);padding-top:12px;margin-top:4px">
+            <p style="font-size:13px;margin:0 0 8px"><strong>Update Status & Actual Quote:</strong></p>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+              <select id="td-status"
+                style="border:1px solid var(--border);border-radius:8px;padding:8px 12px;
+                       background:var(--surface);color:var(--text);flex:1">
+                ${statuses.map(s => `<option ${s===tk.status?"selected":""}>${s}</option>`).join("")}
+              </select>
+              <input type="number" id="td-actual-quote" placeholder="Actual price (optional)"
+                value="${tk.actual_quote||""}"
+                style="border:1px solid var(--border);border-radius:8px;padding:8px 12px;
+                       background:var(--surface);color:var(--text);width:180px">
+            </div>
+            <textarea id="td-note" placeholder="Add a note for the customer or next technician…"
+              style="width:100%;margin-top:8px;min-height:60px;border:1px solid var(--border);
+                     border-radius:8px;padding:8px 12px;background:var(--surface);
+                     color:var(--text);box-sizing:border-box">${tk.update_note||""}</textarea>
+          </div>
+          <div class="modal-actions">
+            <button class="secondary-button" data-close>Close</button>
+            <button class="primary-button" data-action="save-ticket-detail" data-id="${tk.id}">Save Update</button>
+          </div>
+        </div>`;
     })(),
 
     // ── Ticket checkout — fill prices + add components ──────────────
@@ -2015,6 +2089,28 @@ if (el.dataset.action === "save-quick-comps") {
     state.route = "pos"; render(); return;
   }
 
+  // ── View ticket detail ───────────────────────────────────────────
+  const viewTicketEl = el.closest("[data-view-ticket]");
+  if (viewTicketEl) {
+    state.modal = { type: "ticketDetail", id: String(viewTicketEl.dataset.viewTicket) };
+    render(); return;
+  }
+
+  // ── Save ticket detail update ─────────────────────────────────────
+  if (el.dataset.action === "save-ticket-detail") {
+    const ticketId   = el.dataset.id;
+    const newStatus  = document.getElementById("td-status")?.value;
+    const actualQuote = Number(document.getElementById("td-actual-quote")?.value || 0);
+    const note       = document.getElementById("td-note")?.value || "";
+    const updates    = { status: newStatus, update_note: note };
+    if (actualQuote > 0) updates.actual_quote = actualQuote;
+    const { error } = await sb.from("repair_tickets")
+      .update(updates).eq("id", ticketId);
+    if (error) { alert("Update failed: " + error.message); return; }
+    state.modal = null;
+    await load(); return;
+  }
+
   // ── Repair component tap buttons ─────────────────────────────────
   if (el.dataset.comp !== undefined) {
     const name = el.dataset.comp;
@@ -2023,12 +2119,23 @@ if (el.dataset.action === "save-quick-comps") {
     if (idx >= 0) sel.splice(idx, 1);
     else sel.push({ name, tag: "Repaired", price: 0 });
     state.modal.selectedComponents = sel;
+    // Save typed field values so render() doesn't wipe them
+    const form = document.querySelector("[data-form='repair']");
+    if (form) {
+      const fd = new FormData(form);
+      state.modal._draft = Object.fromEntries(fd.entries());
+    }
     render(); return;
   }
   if (el.dataset.removeComp !== undefined) {
     const sel = state.modal.selectedComponents || [];
     sel.splice(Number(el.dataset.removeComp), 1);
     state.modal.selectedComponents = sel;
+    const form = document.querySelector("[data-form='repair']");
+    if (form) {
+      const fd = new FormData(form);
+      state.modal._draft = Object.fromEntries(fd.entries());
+    }
     render(); return;
   }
 
@@ -2241,7 +2348,15 @@ document.addEventListener("change", async event => {
   if (t.dataset.compTag !== undefined) {
     const sel = state.modal?.selectedComponents || [];
     const idx = Number(t.dataset.compTag);
-    if (sel[idx]) { sel[idx].tag = t.value; render(); }
+    if (sel[idx]) {
+      sel[idx].tag = t.value;
+      const form = document.querySelector("[data-form='repair']");
+      if (form) {
+        const fd = new FormData(form);
+        state.modal._draft = Object.fromEntries(fd.entries());
+      }
+      render();
+    }
     return;
   }
 });
