@@ -140,6 +140,16 @@ function applyBranding() {
   document.documentElement.style.setProperty("--secondary", CFG.secondary_color || "#e9b949");
   document.querySelector('meta[name="theme-color"]')
     ?.setAttribute("content", CFG.primary_color || "#126c5b");
+  
+  // Dynamic favicon from shop logo
+  if (CFG.shop_logo) {
+    const favicon = document.getElementById("dynamic-favicon");
+    if (favicon) {
+      favicon.href = CFG.shop_logo;
+      favicon.type = "image/png";
+    }
+  }
+
 }
 
 // ── currentTenant shim (keep UI functions working unchanged) ───────
@@ -274,8 +284,11 @@ function loginScreen() {
     <div style="min-height:100vh;display:grid;place-items:center;background:var(--bg);padding:16px">
       <div class="card" style="width:min(400px,95vw);display:grid;gap:20px;padding:32px">
         <div style="text-align:center;display:grid;gap:8px">
-          <div class="logo" style="margin:0 auto 8px;width:60px;height:60px;font-size:20px">
-            ${CFG.shop_name?.slice(0,2).toUpperCase()||"FP"}
+          <div class="logo" style="margin:0 auto 8px;width:72px;height:72px;font-size:20px;overflow:hidden">
+            ${CFG.shop_logo
+              ? `<img src="${CFG.shop_logo}" alt="${CFG.shop_name}"
+                   style="width:100%;height:100%;object-fit:contain;border-radius:inherit">`
+              : CFG.shop_name?.slice(0,2).toUpperCase()||"FP"}
           </div>
           <h2 style="margin:0">${CFG.shop_name||"RetailOS"}</h2>
           <p class="muted" style="font-size:13px;margin:0">Sign in to continue</p>
@@ -375,7 +388,9 @@ async function submitPin() {
   // 1. Check admin password
   if (String(entered) === String(CFG.admin_password)) {
     SESSION = { employee: { name: "Admin", role: "Business Owner" }, isAdmin: true, loginSkipped: false };
-    state.role = "Business Owner";
+    state.role    = "Business Owner";
+    state.route   = "admin";
+    state.adminModule = "dashboard";
     loginScreen._preview = null;
     _saveSession();
     render();
@@ -388,7 +403,14 @@ async function submitPin() {
     SESSION = { employee: res.employee, isAdmin: false, loginSkipped: false };
     const role = res.employee.role;
     state.role = role;
-    if (role === "Cashier" || role === "Technician") state.route = "pos";
+    if (role === "Cashier") {
+      state.route = "pos";
+    } else if (role === "Technician") {
+      state.route = "technician";
+    } else if (role === "Business Owner" || role === "Manager") {
+      state.route       = "admin";
+      state.adminModule = "dashboard";
+    }
     loginScreen._preview = null;
     _saveSession();
     render();
@@ -716,8 +738,11 @@ function render() {
   const tenant = currentTenant();
 
   // Cashiers can only see POS
-  if (state.role === "Cashier" || state.role === "Technician" || state.role === "Inventory Staff") {
-    if (state.route !== "pos") state.route = can("pos") ? "pos" : "admin";
+  if (state.role === "Cashier" || state.role === "Inventory Staff") {
+    if (state.route !== "pos") state.route = "pos";
+  }
+  if (state.role === "Technician") {
+    if (!["pos","technician"].includes(state.route)) state.route = "technician";
   }
   if (!["pos","admin"].includes(state.route)) state.route = "pos";
   if (!can(state.adminModule)) state.adminModule = "dashboard";
@@ -741,7 +766,7 @@ function render() {
     <span class="muted" style="font-size:11px">· ${SESSION.employee.role}</span>
   </span>` : ""}
 <span class="chip"><i class="dot ${state.online?(state.syncing?"syncing":""):"offline"}"></i>${state.online?(state.syncing?"Syncing":"Online"):"Offline"}</span>
-            ${can("pos") ?`<button class="${state.route==="pos"?"primary-button":"secondary-button"}" data-route="pos">POS</button>`:""}
+            ${state.role === "Technician" ? "" : can("pos") ?`<button class="${state.route==="pos"?"primary-button":"secondary-button"}" data-route="pos">POS</button>`:""}
             ${(SESSION.isAdmin || (can("dashboard")||can("inventory")) && !["Cashier","Technician"].includes(state.role))?`<button class="${state.route==="admin"?"primary-button":"secondary-button"}" data-route="admin">Admin</button>`:""}
             ${state.installPrompt?`<button class="icon-button" data-action="install">Install</button>`:""}
             <button class="icon-button" data-action="theme">${state.theme==="dark"?"Light":"Dark"}</button>
@@ -761,6 +786,7 @@ function render() {
 
 function pageContent() {
   if (state.route === "pos") return pos();
+  if (state.route === "technician") return technicianView();
   const pages = {
     dashboard,
     repairs,
@@ -1007,18 +1033,56 @@ function pos() {
       <div class="grid" style="align-content:start;gap:12px">
       ${(CFG.quick_items||[]).length ? `
           <div class="card">
-            <h2 style="margin-bottom:10px">Quick Items</h2>
-            <div style="display:flex;flex-wrap:wrap;gap:8px">
+            <h2 style="margin-bottom:12px">Quick Items</h2>
+            <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">
               ${(CFG.quick_items||[]).map(item => `
-                <div style="position:relative">
-                  <button class="secondary-button" style="font-size:13px;padding:7px 12px"
-                    data-qitem-name="${item.name}"
-                    data-qitem-prices='${JSON.stringify(item.prices)}'>
-                    ${item.name}
-                  </button>
-                </div>`).join("")}
+                <button class="secondary-button"
+                  style="font-size:15px;padding:11px 18px;border-radius:10px;font-weight:500"
+                  data-qitem-name="${item.name}"
+                  data-qitem-prices='${JSON.stringify(item.prices)}'>
+                  ${item.name}
+                </button>`).join("")}
             </div>
-          </div>` : ""}  
+            <div style="border-top:1px solid var(--border);padding-top:12px">
+              <p style="font-size:12px;font-weight:600;color:var(--muted);
+                        text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">
+                Custom / One-off Item
+              </p>
+              <div style="display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:end">
+                <label class="field" style="margin:0">
+                  <span style="font-size:12px">Item Name</span>
+                  <input id="custom-item-name" placeholder="e.g. Screen Guard"
+                    style="font-size:13px">
+                </label>
+                <label class="field" style="margin:0">
+                  <span style="font-size:12px">Price</span>
+                  <input id="custom-item-price" type="number" min="0"
+                    placeholder="0" style="width:90px;font-size:13px">
+                </label>
+                <button class="primary-button"
+                  style="padding:9px 14px;font-size:13px;white-space:nowrap"
+                  data-action="add-custom-item">+ Add</button>
+              </div>
+            </div>
+          </div>` : `
+          <div class="card">
+            <h2 style="margin-bottom:12px">Custom / One-off Item</h2>
+            <div style="display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:end">
+              <label class="field" style="margin:0">
+                <span style="font-size:12px">Item Name</span>
+                <input id="custom-item-name" placeholder="e.g. Screen Guard"
+                  style="font-size:13px">
+              </label>
+              <label class="field" style="margin:0">
+                <span style="font-size:12px">Price</span>
+                <input id="custom-item-price" type="number" min="0"
+                  placeholder="0" style="width:90px;font-size:13px">
+              </label>
+              <button class="primary-button"
+                style="padding:9px 14px;font-size:13px;white-space:nowrap"
+                data-action="add-custom-item">+ Add</button>
+            </div>
+          </div>`}  
       ${tenant.repairModuleEnabled ? `
           <div class="card">
             <h2 style="margin-bottom:12px">Open Repair Tickets</h2>
@@ -1243,6 +1307,86 @@ function dashboard() {
           </div>
         </div>
       </div>
+    </div>`;
+}
+
+function technicianView() {
+  const active = (state.data.tickets || []).filter(t =>
+    !["Delivered","Declined"].includes(t.status) &&
+    (`${t.customer_name} ${t.ticket_number} ${t.device_brand} ${t.device_model} ${t.status}`)
+      .toLowerCase().includes((state.filter||"").toLowerCase())
+  );
+  const tenant = currentTenant();
+  const statusColors = {
+    "Pending":"warn","In Progress":"warn","Ready":"good","Delivered":"good","Declined":"bad"
+  };
+  return `
+    <div style="display:grid;gap:16px;padding:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+        <div>
+          <h1 style="margin:0;font-size:20px">My Repair Queue</h1>
+          <p class="muted" style="font-size:13px;margin:4px 0 0">
+            ${active.length} active ticket${active.length!==1?"s":""} · ${new Date().toLocaleDateString()}
+          </p>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${["Pending","In Progress","Ready"].map(s => {
+            const count = (state.data.tickets||[]).filter(t => t.status === s).length;
+            return `<span class="badge ${statusColors[s]}" style="font-size:12px;padding:5px 10px">
+              ${s}: ${count}
+            </span>`;
+          }).join("")}
+        </div>
+      </div>
+
+      <input class="search" placeholder="Search customer, device, ticket…"
+        data-filter="repair" value="${state.filter||""}"
+        style="font-size:14px;padding:10px 14px">
+
+      ${active.length ? active.map(t => `
+        <div class="card" style="display:grid;gap:12px;cursor:pointer"
+             data-view-ticket="${t.id}">
+          <div style="display:flex;justify-content:space-between;align-items:start;gap:12px">
+            <div style="display:grid;gap:3px">
+              <strong style="font-size:16px">${t.customer_name}</strong>
+              <span class="muted" style="font-size:12px">${t.ticket_number} · ${t.customer_phone||""}</span>
+            </div>
+            <span class="badge ${statusColors[t.status]||"warn"}"
+              style="flex-shrink:0;font-size:12px">${t.status}</span>
+          </div>
+          <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:13px">
+            <span>📱 <strong>${t.device_brand} ${t.device_model}</strong></span>
+            ${t.imei ? `<span class="muted">IMEI: ${t.imei}</span>` : ""}
+          </div>
+          ${t.issue_noted ? `
+            <div style="font-size:13px;padding:8px 12px;background:var(--surface-2);
+                        border-radius:8px;color:var(--text)">
+              🔧 ${t.issue_noted}
+            </div>` : ""}
+          ${(t.components_noted||[]).length ? `
+            <div style="font-size:12px;color:var(--muted)">
+              Parts: ${t.components_noted.map(c => c.name).join(", ")}
+            </div>` : ""}
+          <div style="display:flex;gap:8px;flex-wrap:wrap" onclick="event.stopPropagation()">
+            ${["Pending","In Progress","Ready"].map(s =>
+              s !== t.status ? `
+              <button class="secondary-button" style="font-size:12px;padding:6px 12px"
+                data-action="tech-status" data-ticket-id="${t.id}" data-status="${s}">
+                → ${s}
+              </button>` : ""
+            ).join("")}
+            ${CFG.technician_module_enabled !== false ? `
+            <button class="primary-button" style="font-size:12px;padding:6px 12px"
+              data-action="open-ticket-editor" data-ticket-id="${t.id}">
+              Edit Components
+            </button>` : ""}
+          </div>
+        </div>`).join("") : `
+        <div class="card" style="text-align:center;padding:40px;color:var(--muted)">
+          <div style="font-size:36px;margin-bottom:12px">✅</div>
+          <strong>All clear</strong>
+          <p style="font-size:13px;margin:6px 0 0">No active repair tickets right now.</p>
+        </div>`}
     </div>`;
 }
 
@@ -1760,8 +1904,27 @@ function modal() {
               if (el) el.textContent = 'Rs. ' + Math.max(0, total).toLocaleString();
             }
             document.addEventListener("keydown", e => {
+  // ── Login screen — Enter submits ──────────────────────────────
   const onLoginScreen = !SESSION.employee && !SESSION.loginSkipped;
   if (onLoginScreen && e.key === "Enter") { e.preventDefault(); submitPin(); return; }
+
+  // ── PIN prompt modal — capture keyboard ──────────────────────
+  const pinPromptOpen = !!document.getElementById("pp-display");
+  if (!pinPromptOpen) return;
+
+  if (e.key === "Enter" || e.key === "Return") {
+    e.preventDefault(); submitPp(); return;
+  }
+  if (e.key === "Backspace") {
+    e.preventDefault(); handlePpKey("⌫"); return;
+  }
+  if (e.key === "Escape") {
+    e.preventDefault();
+    state.modal = null; ppBuffer = ""; render(); return;
+  }
+  if (/^[a-zA-Z0-9]$/.test(e.key)) {
+    e.preventDefault(); handlePpKey(e.key); return;
+  }
 });
 
 document.addEventListener("input", e => {
@@ -2429,6 +2592,36 @@ if (el.dataset.action === "save-quick-comps") {
     state.teLabour = null;
     state.modal    = null;
     await load(); return;
+  }
+  if (el.dataset.action === "add-custom-item") {
+    const name  = document.getElementById("custom-item-name")?.value?.trim();
+    const price = parseFloat(document.getElementById("custom-item-price")?.value || "0");
+    if (!name)    { alert("Enter an item name."); return; }
+    if (price <= 0) { alert("Enter a valid price."); return; }
+    state.cart.push({
+      id:            `custom-${Date.now()}`,
+      name:          name,
+      productName:   name,
+      soldPrice:     price,
+      originalPrice: price,
+      qty:           1,
+      isCustom:      true,
+    });
+    // Clear inputs
+    const ni = document.getElementById("custom-item-name");
+    const pi = document.getElementById("custom-item-price");
+    if (ni) ni.value = "";
+    if (pi) pi.value = "";
+    render(); return;
+  }
+  if (el.dataset.action === "tech-status") {
+    const { error } = await sb.from("tickets")
+      .update({ status: el.dataset.status })
+      .eq("id", el.dataset.ticketId);
+    if (error) { alert(error.message); return; }
+    const tk = state.data.tickets.find(t => String(t.id) === String(el.dataset.ticketId));
+    if (tk) tk.status = el.dataset.status;
+    render(); return;
   }
   if (el.dataset.action === "toggle-receipt") {
     const id = Number(el.dataset.receiptId);
