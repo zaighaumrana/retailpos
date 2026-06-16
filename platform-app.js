@@ -28,13 +28,17 @@ let PCFG = { admin_password: "1234" };
 
 /* ── Supabase helpers ──────────────────────────────────────────── */
 async function loadPlatform() {
-  const [clients, support, config] = await Promise.all([
+  const [clients, support, config, usage, invoices] = await Promise.all([
     pb.from("clients").select("*").order("created_at", { ascending: false }),
     pb.from("support_tickets").select("*").order("created_at", { ascending: false }),
     pb.from("platform_config").select("*").single(),
+    pb.from("usage_logs").select("*").gte("recorded_at", new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()),
+    pb.from("billing_cycles").select("*").order("created_at", { ascending: false }),
   ]);
-  pState.data.clients = clients.data || [];
-  pState.data.support = support.data || [];
+  pState.data.clients  = clients.data  || [];
+  pState.data.support  = support.data  || [];
+  pState.data.usage    = usage.data    || [];
+  pState.data.invoices = invoices.data || [];
   if (config.data) PCFG = config.data;
   render();
 }
@@ -73,6 +77,7 @@ const money = (v, sym = "Rs.") =>
 const NAV = [
   { page: "overview", icon: "▦", label: "Overview"        },
   { page: "clients",  icon: "◉", label: "Clients"         },
+  { page: "billing",  icon: "◑", label: "Billing"         },
   { page: "support",  icon: "◈", label: "Support Tickets" },
   { page: "settings", icon: "◐", label: "Settings"        },
 ];
@@ -146,6 +151,7 @@ function platformPage() {
     case "overview":      return pageOverview();
     case "clients":       return pageClients();
     case "client-detail": return pageClientDetail();
+    case "billing":       return pageBilling();
     case "support":       return pageSupport();
     case "settings":      return pageSettings();
     default:              return pageOverview();
@@ -450,6 +456,80 @@ function pageClientDetail() {
 }
 
 /* ── Support ───────────────────────────────────────────────────── */
+function pageBilling() {
+  const clients  = pState.data.clients  || [];
+  const usage    = pState.data.usage    || [];
+  const invoices = pState.data.invoices || [];
+  const now      = new Date();
+  const monthLabel = now.toLocaleString("default", { month: "long", year: "numeric" });
+
+  const rows = clients.filter(c => c.status === "Active").map(c => {
+    const receipts    = usage.filter(u => u.client_id === c.id).length;
+    const fixedFee    = Number(c.fixed_fee || 0);
+    const rate        = Number(c.per_receipt_rate || 0);
+    const model       = c.billing_model || "fixed";
+    const usageFee    = model === "fixed" ? 0 : receipts * rate;
+    const total       = model === "fixed" ? fixedFee : model === "hybrid"
+      ? fixedFee + usageFee : usageFee;
+    const lastInvoice = invoices.find(i => i.client_id === c.id);
+    const status      = lastInvoice?.status || "—";
+    return { c, receipts, fixedFee, usageFee, total, model, status, lastInvoice };
+  });
+
+  const totalDue  = rows.reduce((s, r) => s + r.total, 0);
+  const totalRcpt = rows.reduce((s, r) => s + r.receipts, 0);
+  const unpaid    = rows.filter(r => r.status === "Unpaid").length;
+
+  return `
+    ${tit("Billing", `${monthLabel} — Usage & Invoices`, "")}
+    <div class="kpi-grid grid" style="margin-bottom:16px">
+      ${[
+        ["This Month's Receipts", totalRcpt, ""],
+        ["Total Revenue Due",     `Rs. ${totalDue.toLocaleString()}`, "good"],
+        ["Unpaid Invoices",       unpaid, unpaid ? "bad" : ""],
+      ].map(([l,v,m]) => `<div class="card kpi">
+        <span class="label">${l}</span>
+        <span class="value">${v}</span>
+        ${m ? `<span class="badge ${m}" style="width:fit-content">${m==="good"?"Healthy":"Attention"}</span>` : ""}
+      </div>`).join("")}
+    </div>
+    <div class="card" style="display:grid;gap:0">
+      <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr auto;
+                  gap:12px;padding:10px 14px;font-size:12px;font-weight:600;
+                  color:var(--muted);border-bottom:1px solid var(--border)">
+        <span>Client</span><span>Model</span><span>Receipts</span>
+        <span>Amount Due</span><span>Status</span><span></span>
+      </div>
+      ${rows.map(({ c, receipts, total, model, status, lastInvoice }) => `
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr auto;
+                    gap:12px;padding:12px 14px;align-items:center;
+                    border-bottom:1px solid var(--border)">
+          <div>
+            <strong style="font-size:14px">${c.name}</strong>
+            <div class="muted" style="font-size:12px">${c.plan}</div>
+          </div>
+          <span style="font-size:13px;text-transform:capitalize">${model}</span>
+          <span style="font-size:13px">${receipts}</span>
+          <span style="font-size:14px;font-weight:600">Rs. ${total.toLocaleString()}</span>
+          <span class="badge ${status==="Paid"?"good":status==="Unpaid"?"bad":"warn"}"
+            style="width:fit-content">${status}</span>
+          <div style="display:flex;gap:6px">
+            ${status !== "Paid" ? `
+              <button class="primary-button" style="font-size:12px;padding:5px 10px"
+                data-p-action="generate-invoice" data-p-id="${c.id}"
+                data-p-total="${total}" data-p-receipts="${receipts}">
+                Invoice
+              </button>` : ""}
+            ${lastInvoice?.status === "Unpaid" ? `
+              <button class="secondary-button" style="font-size:12px;padding:5px 10px"
+                data-p-action="mark-paid" data-p-id="${lastInvoice.id}">
+                Paid ✓
+              </button>` : ""}
+          </div>
+        </div>`).join("")}
+    </div>`;
+}
+
 function pageSupport() {
   const tickets = pState.data.support
     .filter(s => s.subject?.toLowerCase().includes(pState.filter.toLowerCase())
@@ -706,6 +786,34 @@ document.addEventListener("click", async event => {
       render();
     }
     return;
+  }
+  if (action === "generate-invoice") {
+    const clientId = Number(el.dataset.pId);
+    const client   = pState.data.clients.find(c => c.id === clientId);
+    if (!client) return;
+    const now        = new Date();
+    const periodStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split("T")[0];
+    const periodEnd   = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split("T")[0];
+    const { error } = await pb.from("billing_cycles").insert({
+      client_id:        clientId,
+      period_start:     periodStart,
+      period_end:       periodEnd,
+      fixed_fee:        Number(client.fixed_fee || 0),
+      receipt_count:    Number(el.dataset.pReceipts),
+      per_receipt_rate: Number(client.per_receipt_rate || 0),
+      total_due:        Number(el.dataset.pTotal),
+      status:           "Unpaid",
+    });
+    if (error) { alert(error.message); return; }
+    await loadPlatform(); return;
+  }
+
+  if (action === "mark-paid") {
+    const { error } = await pb.from("billing_cycles")
+      .update({ status: "Paid", paid_at: new Date().toISOString() })
+      .eq("id", el.dataset.pId);
+    if (error) { alert(error.message); return; }
+    await loadPlatform(); return;
   }
   if (action === "resolve-ticket") {
     const { error } = await pb.from("support_tickets")
