@@ -49,7 +49,7 @@ let _pbReporter = null;
 function getPlatformReporter() {
   if (_pbReporter) return _pbReporter;
   if (CFG.platform_url && CFG.platform_anon) {
-    _pbReporter = supabase.createClient(CFG.platform_url, CFG.platform_anon);
+    _pbReporter = createClient(CFG.platform_url, CFG.platform_anon);
   }
   return _pbReporter;
 }
@@ -680,8 +680,10 @@ function buildReturnSlip(data) {
 function render() {
   // ── Gateway: always require login ──
   if (!SESSION.employee && !SESSION.loginSkipped) {
-    document.getElementById("app").innerHTML = loginScreen();
-    // Mount Turnstile after DOM is ready
+    const existingWrap = document.getElementById("cf-turnstile-wrap");
+    if (!existingWrap) {
+      document.getElementById("app").innerHTML = loginScreen();
+    }
     const wrap = document.getElementById("cf-turnstile-wrap");
     if (wrap && window.turnstile && !wrap.dataset.mounted) {
       wrap.dataset.mounted = "1";
@@ -730,8 +732,9 @@ function render() {
   }
   if (state.role === "Technician") {
     if (!["pos","technician"].includes(state.route)) state.route = "technician";
+  } else if (!["pos","admin"].includes(state.route)) {
+    state.route = "pos";
   }
-  if (!["pos","admin"].includes(state.route)) state.route = "pos";
   if (!can(state.adminModule)) state.adminModule = "dashboard";
 
   app.innerHTML = `
@@ -754,7 +757,8 @@ function render() {
   </span>` : ""}
 <span class="chip"><i class="dot ${state.online?(state.syncing?"syncing":""):"offline"}"></i>${state.online?(state.syncing?"Syncing":"Online"):"Offline"}</span>
             ${state.role === "Technician" ? "" : can("pos") ?`<button class="${state.route==="pos"?"primary-button":"secondary-button"}" data-route="pos">POS</button>`:""}
-            ${(SESSION.isAdmin || (can("dashboard")||can("inventory")) && !["Cashier","Technician"].includes(state.role))?`<button class="${state.route==="admin"?"primary-button":"secondary-button"}" data-route="admin">Admin</button>`:""}
+            ${state.role !== "Cashier" && state.role !== "Technician" ? `<button class="${state.route==="pos"?"primary-button":"secondary-button"}" data-route="pos">POS</button>` : ""}
+            ${SESSION.isAdmin || ["Business Owner","Manager"].includes(state.role) ? `<button class="${state.route==="admin"?"primary-button":"secondary-button"}" data-route="admin">Admin</button>` : ""}
             ${state.installPrompt?`<button class="icon-button" data-action="install">Install</button>`:""}
             <button class="icon-button" data-action="theme">${state.theme==="dark"?"Light":"Dark"}</button>
             <button class="icon-button" data-action="logout" style="color:var(--danger)">Logout</button>
