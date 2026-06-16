@@ -87,9 +87,28 @@ function render() {
   document.documentElement.dataset.theme = pState.theme;
 
   if (!pState.authenticated) {
-    app.innerHTML = loginPage();
-    return;
+  app.innerHTML = loginPage();
+
+  const tw = document.getElementById("cf-turnstile-platform");
+
+  if (tw && window.turnstile && !tw.dataset.mounted) {
+    tw.dataset.mounted = "1";
+
+    window.turnstile.render(tw, {
+      sitekey: "YOUR_TURNSTILE_SITEKEY_HERE",
+      theme: "light",
+      callback: () => {
+        const btn = document.getElementById("platform-login-btn");
+        if (btn) btn.disabled = false;
+      }
+    });
+
+    const btn = document.getElementById("platform-login-btn");
+    if (btn) btn.disabled = true;
   }
+
+  return;
+}
 
   app.innerHTML = `
     <div class="platform-shell">
@@ -171,13 +190,18 @@ function loginPage() {
           <h2>RetailOS Platform</h2>
           <p class="muted">Enter admin password to continue</p>
         </div>
+        
         <input id="platform-pin" type="password" class="search"
           placeholder="Admin password"
           style="text-align:center;font-size:20px;letter-spacing:8px">
+          
+        <div id="cf-turnstile-platform" style="display:flex;justify-content:center;margin:8px 0"></div>
+        
         <div id="platform-pin-error" class="hidden"
           style="color:var(--danger);text-align:center;font-size:13px">
           Wrong password.
         </div>
+        
         <button class="primary-button" data-p-action="do-login"
           style="min-height:48px;font-size:16px">
           Login
