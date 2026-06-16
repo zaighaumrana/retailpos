@@ -52,6 +52,15 @@ function _clearSession() {
     sessionStorage.removeItem("retailos_module");
   } catch {}
 }
+// Restore route on boot
+(function() {
+  try {
+    const r = sessionStorage.getItem("retailos_route");
+    const m = sessionStorage.getItem("retailos_module");
+    if (r) state.route = r;
+    if (m) state.adminModule = m;
+  } catch {}
+})();
 // ── Platform billing reporter ─────────────────────────────────────
 let _pbReporter = null;
 function getPlatformReporter() {
@@ -72,16 +81,6 @@ async function pingUsage() {
   }
 }
 let SESSION = _loadSession();
-
-// Restore last route from session
-(function() {
-  try {
-    const r = sessionStorage.getItem("retailos_route");
-    const m = sessionStorage.getItem("retailos_module");
-    if (r) state.route = r;
-    if (m) state.adminModule = m;
-  } catch {}
-})();
 
 // ── Config cache (from shop_config table) ──
 let CFG = {
@@ -208,7 +207,7 @@ const ACCESS = {
   "Business Owner": ["dashboard","repairs","inventory","reports","receipts","employees","settings","pos"],
   "Manager":        ["dashboard","repairs","inventory","reports","receipts","pos"],
   "Cashier":        ["pos"],
-  "Technician":     ["repairs","technician"],
+  "Technician":     ["repairs","pos"],
 };
 function can(mod) {
   // Also gate by module toggles from CFG
@@ -455,7 +454,7 @@ function openPinPrompt(purpose, callback) {
 
 function pinPromptHTML(purpose) {
   const label = {
-    admin:    "Admin PIN required",
+    admin:    "Admin password required",
     settle:   "Admin PIN to settle credit",
     return:   "Admin PIN to process return",
     checkout: "Enter your employee PIN",
@@ -464,45 +463,58 @@ function pinPromptHTML(purpose) {
   return `
     <div class="modal" style="max-width:340px">
       <h2>${label}</h2>
-      <p class="muted" style="font-size:13px;margin:-4px 0 10px">Type your PIN and press Enter</p>
-      <input id="pp-input" type="password" autocomplete="off"
-        maxlength="6" autofocus
-        style="width:100%;font-size:24px;letter-spacing:8px;text-align:center;
-               border:2px solid var(--border);border-radius:10px;padding:12px;
-               background:var(--surface);color:var(--text)">
+      <div id="pp-display"
+        style="text-align:center;font-size:30px;letter-spacing:16px;min-height:48px;
+               border-bottom:2px solid var(--border);padding-bottom:8px;margin:10px 0">····</div>
       <div id="pp-error" class="hidden"
-        style="color:var(--danger);text-align:center;font-size:13px;margin:8px 0">
-        Wrong PIN. Try again.
+        style="color:var(--danger);text-align:center;font-size:13px;margin-bottom:8px">
+        Wrong PIN.
       </div>
-      <div class="modal-actions" style="margin-top:14px">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+        ${[1,2,3,4,5,6,7,8,9,"⌫",0,"✓"].map(k=>`
+          <button class="secondary-button"
+            style="font-size:20px;min-height:50px"
+            data-pp-key="${k}">${k}</button>`).join("")}
+      </div>
+      <div class="modal-actions" style="margin-top:10px">
         <button class="secondary-button" data-close>Cancel</button>
-        <button class="primary-button" data-action="pp-submit">Confirm</button>
       </div>
     </div>`;
 }
 
-function handlePpKey(key) { /* legacy no-op — input field now used */ }
+function handlePpKey(key) {
+  const display = document.getElementById("pp-display");
+  const errEl   = document.getElementById("pp-error");
+  if (!display) return;
+  if (key === "⌫") {
+    ppBuffer = ppBuffer.slice(0, -1);
+  } else if (key === "✓") {
+    submitPp(); return;
+  } else {
+    if (ppBuffer.length >= 4) return;
+    ppBuffer += String(key);
+  }
+  display.textContent = "●".repeat(ppBuffer.length).padEnd(4, "·");
+  if (errEl) errEl.classList.add("hidden");
+  if (ppBuffer.length === 4) submitPp();
+}
 
 async function submitPp() {
-  const input = document.getElementById("pp-input");
-  const pin   = input ? input.value.trim() : ppBuffer;
-  if (!pin) return;
-
-  const errEl = document.getElementById("pp-error");
-  if (errEl) errEl.classList.add("hidden");
-
+  const pin = ppBuffer;
+  ppBuffer  = "";
   let res;
   if (["admin","settle","return"].includes(ppPurpose)) {
     res = await verifyAdmin(pin);
-    if (res.ok) { state.modal = null; ppCallback && ppCallback(pin, null); render(); return; }
+    if (res.ok) { state.modal = null; ppCallback && ppCallback(pin, null); }
   } else {
     res = await verifyPin(pin);
-    if (res.ok) { state.modal = null; ppCallback && ppCallback(pin, res.employee); render(); return; }
+    if (res.ok) { state.modal = null; ppCallback && ppCallback(pin, res.employee); }
   }
-
   if (!res.ok) {
-    if (errEl) errEl.classList.remove("hidden");
-    if (input) { input.value = ""; input.focus(); }
+    const errEl   = document.getElementById("pp-error");
+    const display = document.getElementById("pp-display");
+    if (errEl)   errEl.classList.remove("hidden");
+    if (display) display.textContent = "····";
   }
 }
 
@@ -698,10 +710,8 @@ function buildReturnSlip(data) {
 function render() {
   // ── Gateway: always require login ──
   if (!SESSION.employee && !SESSION.loginSkipped) {
-    const existingWrap = document.getElementById("cf-turnstile-wrap");
-    if (!existingWrap) {
-      document.getElementById("app").innerHTML = loginScreen();
-    }
+    document.getElementById("app").innerHTML = loginScreen();
+    // Mount Turnstile after DOM is ready
     const wrap = document.getElementById("cf-turnstile-wrap");
     if (wrap && window.turnstile && !wrap.dataset.mounted) {
       wrap.dataset.mounted = "1";
@@ -749,8 +759,10 @@ function render() {
     if (state.route !== "pos") state.route = "pos";
   }
   if (state.role === "Technician") {
-    if (!["pos","technician"].includes(state.route)) state.route = "technician";
-  } else if (!["pos","admin"].includes(state.route)) {
+    state.route = "technician"; // always force technician view
+  } else if (state.role === "Business Owner" || state.role === "Manager" || SESSION.isAdmin) {
+    if (!["pos","admin"].includes(state.route)) state.route = "admin";
+  } else if (state.role === "Cashier") {
     state.route = "pos";
   }
   if (!can(state.adminModule)) state.adminModule = "dashboard";
@@ -774,9 +786,11 @@ function render() {
     <span class="muted" style="font-size:11px">· ${SESSION.employee.role}</span>
   </span>` : ""}
 <span class="chip"><i class="dot ${state.online?(state.syncing?"syncing":""):"offline"}"></i>${state.online?(state.syncing?"Syncing":"Online"):"Offline"}</span>
-            ${state.role === "Technician" ? "" : can("pos") ?`<button class="${state.route==="pos"?"primary-button":"secondary-button"}" data-route="pos">POS</button>`:""}
-            ${state.role !== "Cashier" && state.role !== "Technician" ? `<button class="${state.route==="pos"?"primary-button":"secondary-button"}" data-route="pos">POS</button>` : ""}
-            ${(SESSION.isAdmin || ["Business Owner","Manager"].includes(state.role || SESSION.employee?.role)) ? `<button class="${state.route==="admin"?"primary-button":"secondary-button"}" data-route="admin">Admin</button>` : ""}
+            ${(state.role === "Business Owner" || state.role === "Manager" || SESSION.isAdmin) ? `
+              <button class="${state.route==="pos"?"primary-button":"secondary-button"}" data-route="pos">POS</button>
+              <button class="${state.route==="admin"?"primary-button":"secondary-button"}" data-route="admin">Admin</button>
+            ` : ""}
+            ${state.role === "Cashier" ? `<button class="primary-button" data-route="pos">POS</button>` : ""}
             ${state.installPrompt?`<button class="icon-button" data-action="install">Install</button>`:""}
             <button class="icon-button" data-action="theme">${state.theme==="dark"?"Light":"Dark"}</button>
             <button class="icon-button" data-action="logout" style="color:var(--danger)">Logout</button>
@@ -1832,7 +1846,7 @@ function modal() {
             <textarea id="td-note" placeholder="Add a note for the customer or next technician…"
               style="width:100%;margin-top:8px;min-height:60px;border:1px solid var(--border);
                      border-radius:8px;padding:8px 12px;background:var(--surface);
-                     color:var(--text);box-sizing:border-box">${tk.update_note||""}</textarea>
+                     color:var(--text);box-sizing:border-box">${tk.technician_note||""}</textarea>
           </div>
           <div class="modal-actions">
             <button class="secondary-button" data-close>Close</button>
@@ -2648,7 +2662,9 @@ if (el.dataset.action === "save-quick-comps") {
   }
 
   // ── PIN prompt pad ───────────────────────────────────────────────
-  if (el.dataset.action === "pp-submit") { submitPp(); return; }
+  if (el.dataset.ppKey !== undefined) {
+    handlePpKey(el.dataset.ppKey); return;
+  }
 
   // ── Modal open / close ───────────────────────────────────────────
   if (el.dataset.modal) {
@@ -2712,15 +2728,12 @@ if (el.dataset.action === "save-quick-comps") {
   // ── View ticket detail ───────────────────────────────────────────
   const viewTicketEl = el.closest("[data-view-ticket]");
   if (viewTicketEl) {
-    // Don't open modal if a button inside the card was clicked
-    if (el.closest("button") || el.tagName === "BUTTON") {
-      // let the button's own handler fire below
-    } else {
+    // Don't open ticket modal if a button inside the card was clicked
+    const isButton = el.tagName === "BUTTON" || el.closest("button");
+    if (!isButton) {
       state.modal = { type: "ticketDetail", id: String(viewTicketEl.dataset.viewTicket) };
       render(); return;
     }
-  }
-    render(); return;
   }
 
   // ── Save ticket detail update ─────────────────────────────────────
@@ -2729,8 +2742,8 @@ if (el.dataset.action === "save-quick-comps") {
     const newStatus  = document.getElementById("td-status")?.value;
     const actualQuote = Number(document.getElementById("td-actual-quote")?.value || 0);
     const note       = document.getElementById("td-note")?.value || "";
-    const updates    = { status: newStatus, update_note: note };
-    if (actualQuote > 0) updates.actual_quote = actualQuote;
+    const updates = { status: newStatus, technician_note: note };
+    if (actualQuote > 0) updates.estimated_quote = actualQuote;
     const { error } = await sb.from("tickets")
       .update(updates).eq("id", ticketId);
     if (error) { alert("Update failed: " + error.message); return; }
