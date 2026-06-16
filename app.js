@@ -269,85 +269,137 @@ async function updateTicket(id, updates) {
 
 // ── Employee login screen HTML ─────────────────────────────────────
 function loginScreen() {
+  const preview = loginScreen._preview || null;
   return `
-    <div style="min-height:100vh;display:grid;place-items:center;background:var(--bg)">
-      <div class="card" style="width:min(380px,90vw);display:grid;gap:18px;padding:28px">
-        <div style="text-align:center">
-          <div class="logo" style="margin:0 auto 14px;width:56px;height:56px;font-size:18px">
+    <div style="min-height:100vh;display:grid;place-items:center;background:var(--bg);padding:16px">
+      <div class="card" style="width:min(400px,95vw);display:grid;gap:20px;padding:32px">
+        <div style="text-align:center;display:grid;gap:8px">
+          <div class="logo" style="margin:0 auto 8px;width:60px;height:60px;font-size:20px">
             ${CFG.shop_name?.slice(0,2).toUpperCase()||"FP"}
           </div>
-          <h2>${CFG.shop_name||"RetailOS"}</h2>
-          <p class="muted">Enter your 4-digit PIN to continue</p>
+          <h2 style="margin:0">${CFG.shop_name||"RetailOS"}</h2>
+          <p class="muted" style="font-size:13px;margin:0">Sign in to continue</p>
         </div>
-        <div id="pin-display"
-          style="text-align:center;font-size:34px;letter-spacing:20px;min-height:52px;
-                 border-bottom:2px solid var(--border);padding-bottom:8px">····</div>
-        <div id="pin-error" class="hidden"
-          style="color:var(--danger);text-align:center;font-size:13px">
-          Invalid PIN. Try again.
+
+        ${preview ? `
+        <div style="display:flex;align-items:center;gap:12px;padding:12px 14px;
+                    background:var(--surface-2);border-radius:10px;
+                    border:1px solid var(--border)">
+          <div class="logo" style="width:38px;height:38px;font-size:13px;flex-shrink:0">
+            ${preview.name.slice(0,2).toUpperCase()}
+          </div>
+          <div style="display:grid;gap:2px">
+            <strong style="font-size:14px">${preview.name}</strong>
+            <span class="muted" style="font-size:12px">${preview.role}</span>
+          </div>
+          <span class="badge good" style="margin-left:auto;font-size:11px">Found</span>
+        </div>` : `
+        <div style="height:62px;border-radius:10px;border:1px dashed var(--border);
+                    display:grid;place-items:center">
+          <span class="muted" style="font-size:13px">Enter password to identify</span>
+        </div>`}
+
+        <div style="display:grid;gap:10px">
+          <label class="field">
+            <span>Password</span>
+            <input id="login-password" type="password"
+              autocomplete="current-password"
+              placeholder="Enter your password"
+              minlength="6"
+              style="font-size:15px;letter-spacing:2px"
+              autofocus>
+          </label>
+          <div id="login-error" class="hidden"
+            style="color:var(--danger);font-size:13px;text-align:center;padding:4px 0">
+            Incorrect password. Please try again.
+          </div>
+          <div id="cf-turnstile-wrap" style="display:flex;justify-content:center;margin:4px 0"></div>
+          <button id="login-btn" class="primary-button"
+            style="width:100%;font-size:15px;padding:12px;margin-top:2px"
+            data-action="login-submit">
+            Login
+          </button>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
-          ${[1,2,3,4,5,6,7,8,9,"⌫",0,"→"].map(k=>`
-            <button class="secondary-button"
-              style="font-size:22px;min-height:58px;border-radius:8px"
-              data-pin-key="${k}">${k}</button>`).join("")}
-        </div>
+
+        <p class="muted" style="text-align:center;font-size:12px;margin:0">
+          ${CFG.shop_address||""}
+        </p>
       </div>
     </div>`;
 }
+loginScreen._preview = null;
 
-let pinBuffer = "";
-
-function handlePinKey(key) {
-  const display = document.getElementById("pin-display");
-  const errEl   = document.getElementById("pin-error");
-  if (!display) return;
-  if (key === "⌫") {
-    pinBuffer = pinBuffer.slice(0, -1);
-  } else if (key === "→") {
-    submitPin(); return;
-  } else {
-    if (pinBuffer.length >= 4) return;
-    pinBuffer += String(key);
+// ── Password login handlers ───────────────────────────────────────
+async function _lookupPassword(val) {
+  if (!val || val.length < 6) { loginScreen._preview = null; return; }
+  // Check admin password
+  if (String(val) === String(CFG.admin_password)) {
+    loginScreen._preview = { name: "Admin", role: "Business Owner" };
+    render(); return;
   }
-  display.textContent = "●".repeat(pinBuffer.length).padEnd(4, "·");
-  if (errEl) errEl.classList.add("hidden");
-  if (pinBuffer.length === 4) submitPin();
+  // Check employee
+  const { data } = await sb.from("employees")
+    .select("name, role, status")
+    .eq("pin_code", val)
+    .eq("status", "Active")
+    .maybeSingle();
+  loginScreen._preview = data ? { name: data.name, role: data.role } : null;
+  render();
+}
+
+let _lookupTimer = null;
+function onPasswordInput(val) {
+  clearTimeout(_lookupTimer);
+  loginScreen._preview = null;
+  if (val.length >= 6) {
+    _lookupTimer = setTimeout(() => _lookupPassword(val), 400);
+  } else {
+    render();
+  }
 }
 
 async function submitPin() {
-  const entered = pinBuffer;
-  pinBuffer = "";
+  const input   = document.getElementById("login-password");
+  const errEl   = document.getElementById("login-error");
+  const btn     = document.getElementById("login-btn");
+  const entered = input?.value?.trim() || "";
 
-  // 1. Check admin password first
+  if (entered.length < 6) {
+    if (errEl) { errEl.textContent = "Password must be at least 6 characters."; errEl.classList.remove("hidden"); }
+    return;
+  }
+
+  if (btn) { btn.disabled = true; btn.textContent = "Logging in…"; }
+  if (errEl) errEl.classList.add("hidden");
+
+  // 1. Check admin password
   if (String(entered) === String(CFG.admin_password)) {
     SESSION = { employee: { name: "Admin", role: "Business Owner" }, isAdmin: true, loginSkipped: false };
     state.role = "Business Owner";
+    loginScreen._preview = null;
     _saveSession();
     render();
     return;
   }
 
-  // 2. Check employee PIN
+  // 2. Check employee
   const res = await verifyPin(entered);
   if (res.ok) {
     SESSION = { employee: res.employee, isAdmin: false, loginSkipped: false };
-    // Route by role
     const role = res.employee.role;
     state.role = role;
-    if (role === "Cashier" || role === "Technician") {
-      state.route = "pos";
-    }
+    if (role === "Cashier" || role === "Technician") state.route = "pos";
+    loginScreen._preview = null;
     _saveSession();
     render();
   } else {
-    const errEl   = document.getElementById("pin-error");
-    const display = document.getElementById("pin-display");
-    if (errEl)   errEl.classList.remove("hidden");
-    if (display) display.textContent = "····";
+    if (btn) { btn.disabled = false; btn.textContent = "Login"; }
+    if (errEl) { errEl.textContent = "Incorrect password. Please try again."; errEl.classList.remove("hidden"); }
+    const inp = document.getElementById("login-password");
+    if (inp) { inp.value = ""; inp.focus(); }
+    loginScreen._preview = null;
   }
 }
-
 // ── PIN prompt modal (discount / checkout / admin / settle / return) ──
 let ppBuffer   = "";
 let ppPurpose  = "";
@@ -663,7 +715,12 @@ function render() {
           </div>
           <div class="top-actions">
             ${state.route==="admin"?`<select class="tenant-switcher compact-select" data-action="admin-module">${ADMIN_MODULES.filter(([k])=>can(k)).map(([k,,l])=>`<option value="${k}" ${k===state.adminModule?"selected":""}>${l}</option>`).join("")}</select>`:""}
-            <span class="chip"><i class="dot ${state.online?(state.syncing?"syncing":""):"offline"}"></i>${state.online?(state.syncing?"Syncing":"Online"):"Offline"}</span>
+            ${SESSION.employee ? `
+  <span class="chip" style="gap:6px">
+    <strong style="font-size:12px">${SESSION.employee.name}</strong>
+    <span class="muted" style="font-size:11px">· ${SESSION.employee.role}</span>
+  </span>` : ""}
+<span class="chip"><i class="dot ${state.online?(state.syncing?"syncing":""):"offline"}"></i>${state.online?(state.syncing?"Syncing":"Online"):"Offline"}</span>
             ${can("pos") ?`<button class="${state.route==="pos"?"primary-button":"secondary-button"}" data-route="pos">POS</button>`:""}
             ${(SESSION.isAdmin || (can("dashboard")||can("inventory")) && !["Cashier","Technician"].includes(state.role))?`<button class="${state.route==="admin"?"primary-button":"secondary-button"}" data-route="admin">Admin</button>`:""}
             ${state.installPrompt?`<button class="icon-button" data-action="install">Install</button>`:""}
@@ -1682,10 +1739,16 @@ function modal() {
               const el      = document.getElementById('tc-total');
               if (el) el.textContent = 'Rs. ' + Math.max(0, total).toLocaleString();
             }
-            document.addEventListener('input', e => {
-              if (e.target.dataset.tcPrice !== undefined ||
-                  e.target.id === 'tc-labour') recalc();
-            });
+            document.addEventListener("keydown", e => {
+  const onLoginScreen = !SESSION.employee && !SESSION.loginSkipped;
+  if (onLoginScreen && e.key === "Enter") { e.preventDefault(); submitPin(); return; }
+});
+
+document.addEventListener("input", e => {
+  if (e.target.id === "login-password") {
+    onPasswordInput(e.target.value);
+  }
+  // existing input handlers below continue...
             recalc();
           })();
         <\/script>`;
@@ -2273,8 +2336,8 @@ if (el.dataset.action === "save-quick-comps") {
   }
 
   // ── Login screen PIN pad ─────────────────────────────────────────
-  if (el.dataset.pinKey !== undefined) {
-    handlePinKey(el.dataset.pinKey); return;
+  if (el.dataset.action === "login-submit") {
+    submitPin(); return;
   }
   if (el.dataset.action === "skip-login") {
     return; // disabled — login is now mandatory
