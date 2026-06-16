@@ -87,7 +87,23 @@ function render() {
   document.documentElement.dataset.theme = pState.theme;
 
   if (!pState.authenticated) {
-  app.innerHTML = loginPage();
+    if (!document.getElementById("cf-turnstile-platform")) {
+      app.innerHTML = loginPage();
+    }
+    const ptw = document.getElementById("cf-turnstile-platform");
+    if (ptw && window.turnstile && !ptw.dataset.mounted) {
+      ptw.dataset.mounted = "1";
+      window.turnstile.render(ptw, {
+        sitekey: "YOUR_TURNSTILE_SITEKEY_HERE",
+        theme: "light",
+        callback: () => {
+          const b = document.getElementById("plat-login-btn");
+          if (b) b.disabled = false;
+        },
+      });
+      const b = document.getElementById("plat-login-btn");
+      if (b) b.disabled = true;
+    }
 
   const tw = document.getElementById("cf-turnstile-platform");
 
@@ -202,7 +218,8 @@ function loginPage() {
           Wrong password.
         </div>
         
-        <button class="primary-button" data-p-action="do-login"
+        <div id="cf-turnstile-platform" style="display:flex;justify-content:center"></div>
+        <button id="plat-login-btn" class="primary-button" data-p-action="do-login"
           style="min-height:48px;font-size:16px">
           Login
         </button>
