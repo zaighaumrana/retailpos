@@ -39,10 +39,18 @@ function _loadSession() {
   } catch { return { employee: null, isAdmin: false, loginSkipped: false }; }
 }
 function _saveSession() {
-  try { sessionStorage.setItem("retailos_session", JSON.stringify(SESSION)); } catch {}
+  try {
+    sessionStorage.setItem("retailos_session", JSON.stringify(SESSION));
+    sessionStorage.setItem("retailos_route", state.route);
+    sessionStorage.setItem("retailos_module", state.adminModule);
+  } catch {}
 }
 function _clearSession() {
-  try { sessionStorage.removeItem("retailos_session"); } catch {}
+  try {
+    sessionStorage.removeItem("retailos_session");
+    sessionStorage.removeItem("retailos_route");
+    sessionStorage.removeItem("retailos_module");
+  } catch {}
 }
 // ── Platform billing reporter ─────────────────────────────────────
 let _pbReporter = null;
@@ -64,6 +72,16 @@ async function pingUsage() {
   }
 }
 let SESSION = _loadSession();
+
+// Restore last route from session
+(function() {
+  try {
+    const r = sessionStorage.getItem("retailos_route");
+    const m = sessionStorage.getItem("retailos_module");
+    if (r) state.route = r;
+    if (m) state.adminModule = m;
+  } catch {}
+})();
 
 // ── Config cache (from shop_config table) ──
 let CFG = {
@@ -758,7 +776,7 @@ function render() {
 <span class="chip"><i class="dot ${state.online?(state.syncing?"syncing":""):"offline"}"></i>${state.online?(state.syncing?"Syncing":"Online"):"Offline"}</span>
             ${state.role === "Technician" ? "" : can("pos") ?`<button class="${state.route==="pos"?"primary-button":"secondary-button"}" data-route="pos">POS</button>`:""}
             ${state.role !== "Cashier" && state.role !== "Technician" ? `<button class="${state.route==="pos"?"primary-button":"secondary-button"}" data-route="pos">POS</button>` : ""}
-            ${SESSION.isAdmin || ["Business Owner","Manager"].includes(state.role) ? `<button class="${state.route==="admin"?"primary-button":"secondary-button"}" data-route="admin">Admin</button>` : ""}
+            ${(SESSION.isAdmin || ["Business Owner","Manager"].includes(state.role || SESSION.employee?.role)) ? `<button class="${state.route==="admin"?"primary-button":"secondary-button"}" data-route="admin">Admin</button>` : ""}
             ${state.installPrompt?`<button class="icon-button" data-action="install">Install</button>`:""}
             <button class="icon-button" data-action="theme">${state.theme==="dark"?"Light":"Dark"}</button>
             <button class="icon-button" data-action="logout" style="color:var(--danger)">Logout</button>
@@ -2694,7 +2712,14 @@ if (el.dataset.action === "save-quick-comps") {
   // ── View ticket detail ───────────────────────────────────────────
   const viewTicketEl = el.closest("[data-view-ticket]");
   if (viewTicketEl) {
-    state.modal = { type: "ticketDetail", id: String(viewTicketEl.dataset.viewTicket) };
+    // Don't open modal if a button inside the card was clicked
+    if (el.closest("button") || el.tagName === "BUTTON") {
+      // let the button's own handler fire below
+    } else {
+      state.modal = { type: "ticketDetail", id: String(viewTicketEl.dataset.viewTicket) };
+      render(); return;
+    }
+  }
     render(); return;
   }
 
