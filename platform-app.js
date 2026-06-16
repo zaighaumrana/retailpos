@@ -643,10 +643,26 @@ document.addEventListener("click", async event => {
 
   if (action === "suspend-client" || action === "activate-client") {
     const newStatus = action === "suspend-client" ? "Suspended" : "Active";
+    const isSuspending = newStatus === "Suspended";
+
+    // 1. Update platform clients table
     const { error } = await pb.from("clients")
       .update({ status: newStatus })
       .eq("id", el.dataset.pId);
     if (error) { alert(error.message); return; }
+
+    // 2. Also write suspension flag into the client's own shop_config
+    const client = pState.clients?.find(c => c.id === Number(el.dataset.pId))
+      || pState.selectedClient;
+    if (client?.supabase_url && client?.supabase_anon) {
+      try {
+        const clientSb = supabase.createClient(client.supabase_url, client.supabase_anon);
+        await clientSb.from("shop_config").update({ suspended: isSuspending }).eq("id", 1);
+      } catch (e) {
+        console.warn("Could not write suspension to client DB:", e.message);
+      }
+    }
+
     if (pState.selectedClient?.id === Number(el.dataset.pId)) {
       pState.selectedClient.status = newStatus;
     }
