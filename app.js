@@ -44,6 +44,25 @@ function _saveSession() {
 function _clearSession() {
   try { sessionStorage.removeItem("retailos_session"); } catch {}
 }
+// ── Platform billing reporter ─────────────────────────────────────
+let _pbReporter = null;
+function getPlatformReporter() {
+  if (_pbReporter) return _pbReporter;
+  if (CFG.platform_url && CFG.platform_anon) {
+    _pbReporter = supabase.createClient(CFG.platform_url, CFG.platform_anon);
+  }
+  return _pbReporter;
+}
+async function pingUsage() {
+  if (!CFG.platform_client_id) return;
+  try {
+    const reporter = getPlatformReporter();
+    if (!reporter) return;
+    await reporter.from("usage_logs").insert({ client_id: CFG.platform_client_id });
+  } catch (e) {
+    console.warn("Usage ping failed:", e.message);
+  }
+}
 let SESSION = _loadSession();
 
 // ── Config cache (from shop_config table) ──
@@ -63,6 +82,7 @@ let CFG = {
   tax_rate:             0,
   inventory_module_enabled: false,
   repair_module_enabled:    true,
+  suspended:                false,
 };
 
 function uid(p) { return `${p}-${Math.random().toString(36).slice(2,7).toUpperCase()}`; }
@@ -600,6 +620,19 @@ function render() {
   // ── Gateway: always require login ──
   if (!SESSION.employee && !SESSION.loginSkipped) {
     document.getElementById("app").innerHTML = loginScreen();
+    return;
+  }
+  // ── Suspension gate ──
+  if (CFG.suspended === true) {
+    document.getElementById("app").innerHTML = `
+      <div style="display:flex;flex-direction:column;align-items:center;
+                  justify-content:center;height:100vh;gap:16px;text-align:center;padding:24px">
+        <div style="font-size:48px">🔒</div>
+        <h2 style="color:var(--danger)">Account Suspended</h2>
+        <p class="muted" style="max-width:360px;line-height:1.6">
+          This RetailOS account has been suspended. Please contact your service provider to restore access.
+        </p>
+      </div>`;
     return;
   }
   // Restore role from session on every render
@@ -2163,6 +2196,7 @@ async function doCheckout() {
   state.udharPhone     = "";
   state.checkoutPayment = "Cash";
   state.modal          = { type: "receipt", sale };
+  pingUsage(); // silent — doesn't block or alert
 
   await load();
 }
