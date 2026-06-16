@@ -95,7 +95,7 @@ function render() {
     tw.dataset.mounted = "1";
 
     window.turnstile.render(tw, {
-      sitekey: "YOUR_TURNSTILE_SITEKEY_HERE",
+      sitekey: "0x4AAAAAADl87EDGnxcg5eJZ",
       theme: "light",
       callback: () => {
         const btn = document.getElementById("platform-login-btn");
