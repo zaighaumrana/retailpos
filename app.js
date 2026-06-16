@@ -672,6 +672,26 @@ function render() {
   // ── Gateway: always require login ──
   if (!SESSION.employee && !SESSION.loginSkipped) {
     document.getElementById("app").innerHTML = loginScreen();
+    // Mount Turnstile after DOM is ready
+    const wrap = document.getElementById("cf-turnstile-wrap");
+    if (wrap && window.turnstile && !wrap.dataset.mounted) {
+      wrap.dataset.mounted = "1";
+      window.turnstile.render(wrap, {
+        sitekey: "0x4AAAAAADl87EDGnxcg5eJZ",
+        theme:   state.theme === "dark" ? "dark" : "light",
+        callback: () => { /* token valid — enable login button */ 
+          const btn = document.getElementById("login-btn");
+          if (btn) btn.disabled = false;
+        },
+        "error-callback": () => {
+          const btn = document.getElementById("login-btn");
+          if (btn) btn.disabled = true;
+        }
+      });
+      // Disable login until captcha passes
+      const btn = document.getElementById("login-btn");
+      if (btn) btn.disabled = true;
+    }
     return;
   }
   // ── Suspension gate ──
