@@ -41,8 +41,8 @@ function _loadSession() {
 function _saveSession() {
   try {
     sessionStorage.setItem("retailos_session", JSON.stringify(SESSION));
-    sessionStorage.setItem("retailos_route", state.route);
-    sessionStorage.setItem("retailos_module", state.adminModule);
+    sessionStorage.setItem("retailos_route",   state.route);
+    sessionStorage.setItem("retailos_module",  state.adminModule);
   } catch {}
 }
 function _clearSession() {
@@ -52,7 +52,7 @@ function _clearSession() {
     sessionStorage.removeItem("retailos_module");
   } catch {}
 }
-// Restore route on boot
+// Restore saved route on boot (before first render)
 (function() {
   try {
     const r = sessionStorage.getItem("retailos_route");
@@ -61,6 +61,7 @@ function _clearSession() {
     if (m) state.adminModule = m;
   } catch {}
 })();
+
 // ── Platform billing reporter ─────────────────────────────────────
 let _pbReporter = null;
 function getPlatformReporter() {
@@ -758,12 +759,13 @@ function render() {
   if (state.role === "Cashier" || state.role === "Inventory Staff") {
     if (state.route !== "pos") state.route = "pos";
   }
+  // Role-based route enforcement
   if (state.role === "Technician") {
-    state.route = "technician"; // always force technician view
+    state.route = "technician";
+  } else if (state.role === "Cashier" || state.role === "Inventory Staff") {
+    state.route = "pos";
   } else if (state.role === "Business Owner" || state.role === "Manager" || SESSION.isAdmin) {
     if (!["pos","admin"].includes(state.route)) state.route = "admin";
-  } else if (state.role === "Cashier") {
-    state.route = "pos";
   }
   if (!can(state.adminModule)) state.adminModule = "dashboard";
 
@@ -786,11 +788,8 @@ function render() {
     <span class="muted" style="font-size:11px">· ${SESSION.employee.role}</span>
   </span>` : ""}
 <span class="chip"><i class="dot ${state.online?(state.syncing?"syncing":""):"offline"}"></i>${state.online?(state.syncing?"Syncing":"Online"):"Offline"}</span>
-            ${(state.role === "Business Owner" || state.role === "Manager" || SESSION.isAdmin) ? `
-              <button class="${state.route==="pos"?"primary-button":"secondary-button"}" data-route="pos">POS</button>
-              <button class="${state.route==="admin"?"primary-button":"secondary-button"}" data-route="admin">Admin</button>
-            ` : ""}
-            ${state.role === "Cashier" ? `<button class="primary-button" data-route="pos">POS</button>` : ""}
+            ${state.role !== "Technician" ? `<button class="${state.route==="pos"?"primary-button":"secondary-button"}" data-route="pos">POS</button>` : ""}
+            ${(SESSION.isAdmin || state.role === "Business Owner" || state.role === "Manager") ? `<button class="${state.route==="admin"?"primary-button":"secondary-button"}" data-route="admin">Admin</button>` : ""}
             ${state.installPrompt?`<button class="icon-button" data-action="install">Install</button>`:""}
             <button class="icon-button" data-action="theme">${state.theme==="dark"?"Light":"Dark"}</button>
             <button class="icon-button" data-action="logout" style="color:var(--danger)">Logout</button>
@@ -1846,7 +1845,7 @@ function modal() {
             <textarea id="td-note" placeholder="Add a note for the customer or next technician…"
               style="width:100%;margin-top:8px;min-height:60px;border:1px solid var(--border);
                      border-radius:8px;padding:8px 12px;background:var(--surface);
-                     color:var(--text);box-sizing:border-box">${tk.technician_note||""}</textarea>
+                     color:var(--text);box-sizing:border-box">${tk.update_note||""}</textarea>
           </div>
           <div class="modal-actions">
             <button class="secondary-button" data-close>Close</button>
@@ -2727,13 +2726,9 @@ if (el.dataset.action === "save-quick-comps") {
 
   // ── View ticket detail ───────────────────────────────────────────
   const viewTicketEl = el.closest("[data-view-ticket]");
-  if (viewTicketEl) {
-    // Don't open ticket modal if a button inside the card was clicked
-    const isButton = el.tagName === "BUTTON" || el.closest("button");
-    if (!isButton) {
-      state.modal = { type: "ticketDetail", id: String(viewTicketEl.dataset.viewTicket) };
-      render(); return;
-    }
+  if (viewTicketEl && el.tagName !== "BUTTON" && !el.closest("button")) {
+    state.modal = { type: "ticketDetail", id: String(viewTicketEl.dataset.viewTicket) };
+    render(); return;
   }
 
   // ── Save ticket detail update ─────────────────────────────────────
@@ -2742,8 +2737,8 @@ if (el.dataset.action === "save-quick-comps") {
     const newStatus  = document.getElementById("td-status")?.value;
     const actualQuote = Number(document.getElementById("td-actual-quote")?.value || 0);
     const note       = document.getElementById("td-note")?.value || "";
-    const updates = { status: newStatus, technician_note: note };
-    if (actualQuote > 0) updates.estimated_quote = actualQuote;
+    const updates = { status: newStatus, update_note: note };
+    if (actualQuote > 0) updates.actual_quote = actualQuote;
     const { error } = await sb.from("tickets")
       .update(updates).eq("id", ticketId);
     if (error) { alert("Update failed: " + error.message); return; }
