@@ -26,7 +26,10 @@ const state = {
   installPrompt:null,
   settingsTab:  "branding",
   checkoutPayment: "Cash",
+  cashTendered:    0,
   cartTicketId:    null,
+  cartAdvance:     0,
+  cartLabour:      0,
   udharName:       "",
   udharPhone:      "",
 };
@@ -57,7 +60,13 @@ function _clearSession() {
   try {
     const r = sessionStorage.getItem("retailos_route");
     const m = sessionStorage.getItem("retailos_module");
-    if (r) state.route = r;
+    const s    = sessionStorage.getItem("retailos_session");
+    const sess = s ? JSON.parse(s) : null;
+    const isAdmin = sess?.isAdmin === true;
+    const role    = sess?.employee?.role || "";
+    const isBackOffice = isAdmin || role === "Business Owner" || role === "Manager";
+    if (r && !(isBackOffice && r === "pos")) state.route = r;
+    if (isBackOffice && !r) state.route = "admin";
     if (m) state.adminModule = m;
   } catch {}
 })();
@@ -71,12 +80,22 @@ function getPlatformReporter() {
   }
   return _pbReporter;
 }
-async function pingUsage() {
+async function pingUsage(moduleType) {
   if (!CFG.platform_client_id) return;
+  const rateMap = {
+    POS:           CFG.per_receipt_rate  || 0,
+    REPAIR_TICKET: CFG.per_ticket_rate   || 0,
+    INVENTORY:     CFG.per_item_rate     || 0,
+  };
   try {
     const reporter = getPlatformReporter();
     if (!reporter) return;
-    await reporter.from("usage_logs").insert({ client_id: CFG.platform_client_id });
+    await reporter.from("usage_logs").insert({
+      client_id:   CFG.platform_client_id,
+      module_type: moduleType,
+      token_count: 1,
+      rate_at_log: rateMap[moduleType] ?? 0,
+    });
   } catch (e) {
     console.warn("Usage ping failed:", e.message);
   }
@@ -98,9 +117,16 @@ let CFG = {
   secondary_color:      "#e9b949",
   currency:             "Rs.",
   tax_rate:             0,
-  inventory_module_enabled: false,
-  repair_module_enabled:    true,
-  suspended:                false,
+  inventory_module_enabled:  false,
+  repair_module_enabled:     true,
+  technician_module_enabled: true,
+  suspended:                 false,
+  platform_client_id:        null,
+  platform_url:              null,
+  platform_anon:             null,
+  per_receipt_rate:          5,
+  per_ticket_rate:           10,
+  per_item_rate:             1,
 };
 
 function uid(p) { return `${p}-${Math.random().toString(36).slice(2,7).toUpperCase()}`; }
@@ -205,15 +231,16 @@ function scoped(store) {
 
 /* ── Role-based access ──────────────────────────────────────────── */
 const ACCESS = {
-  "Business Owner": ["dashboard","repairs","inventory","reports","receipts","employees","settings","pos"],
-  "Manager":        ["dashboard","repairs","inventory","reports","receipts","pos"],
+  "Business Owner": ["dashboard","repairs","inventory","reports","receipts","employees","settings","pos","workshop"],
+  "Manager":        ["dashboard","repairs","inventory","reports","receipts","employees"],
   "Cashier":        ["pos"],
-  "Technician":     ["repairs","pos"],
+  "Technician":     ["workshop"],
 };
 function can(mod) {
   // Also gate by module toggles from CFG
   if (mod === "repairs"   && !CFG.repair_module_enabled)    return false;
   if (mod === "inventory" && !CFG.inventory_module_enabled) return false;
+  if (mod === "workshop"  && !CFG.technician_module_enabled) return false;
   return ACCESS[state.role]?.includes(mod) ?? false;
 }
 
@@ -424,7 +451,7 @@ async function submitPin() {
     if (role === "Cashier") {
       state.route = "pos";
     } else if (role === "Technician") {
-      state.route = "technician";
+      state.route = "workshop";
     } else if (role === "Business Owner" || role === "Manager") {
       state.route       = "admin";
       state.adminModule = "dashboard";
@@ -761,11 +788,11 @@ function render() {
   }
   // Role-based route enforcement
   if (state.role === "Technician") {
-    state.route = "technician";
+    state.route = "workshop";
   } else if (state.role === "Cashier" || state.role === "Inventory Staff") {
     state.route = "pos";
   } else if (state.role === "Business Owner" || state.role === "Manager" || SESSION.isAdmin) {
-    if (!["pos","admin"].includes(state.route)) state.route = "admin";
+    if (!["pos","admin","workshop"].includes(state.route)) state.route = "admin";
   }
   if (!can(state.adminModule)) state.adminModule = "dashboard";
 
@@ -788,8 +815,22 @@ function render() {
     <span class="muted" style="font-size:11px">· ${SESSION.employee.role}</span>
   </span>` : ""}
 <span class="chip"><i class="dot ${state.online?(state.syncing?"syncing":""):"offline"}"></i>${state.online?(state.syncing?"Syncing":"Online"):"Offline"}</span>
-            ${state.role !== "Technician" ? `<button class="${state.route==="pos"?"primary-button":"secondary-button"}" data-route="pos">POS</button>` : ""}
-            ${(SESSION.isAdmin || state.role === "Business Owner" || state.role === "Manager") ? `<button class="${state.route==="admin"?"primary-button":"secondary-button"}" data-route="admin">Admin</button>` : ""}
+
+            ${(SESSION.isAdmin || state.role === "Business Owner") ? `
+              <button class="${state.route==="pos"?"primary-button":"secondary-button"}" data-route="pos">POS</button>
+              ${CFG.technician_module_enabled !== false ? `<button class="${state.route==="workshop"?"primary-button":"secondary-button"}" data-route="workshop">Workshop</button>` : ""}
+              <button class="${state.route==="admin"?"primary-button":"secondary-button"}" data-route="admin">Admin</button>
+            ` : ""}
+            ${state.role === "Manager" ? `
+              <button class="${state.route==="admin"?"primary-button":"secondary-button"}" data-route="admin">Admin</button>
+            ` : ""}
+            ${state.role === "Cashier" ? `
+              <button class="primary-button" data-route="pos">POS</button>
+            ` : ""}
+            ${state.role === "Technician" ? `
+              <button class="primary-button" data-route="workshop">Workshop</button>
+            ` : ""}
+
             ${state.installPrompt?`<button class="icon-button" data-action="install">Install</button>`:""}
             <button class="icon-button" data-action="theme">${state.theme==="dark"?"Light":"Dark"}</button>
             <button class="icon-button" data-action="logout" style="color:var(--danger)">Logout</button>
@@ -807,8 +848,8 @@ function render() {
 }
 
 function pageContent() {
-  if (state.route === "pos") return pos();
-  if (state.route === "technician") return technicianView();
+  if (state.route === "pos")      return pos();
+  if (state.route === "workshop") return technicianView();
   const pages = {
     dashboard,
     repairs,
@@ -1185,8 +1226,34 @@ function pos() {
           <option ${state.checkoutPayment==="Udhar (Credit)"?"selected":""}>Udhar (Credit)</option>
         </select>
 
+        ${state.checkoutPayment === "Cash" ? (() => {
+          const grandTotal = subtotal + tax;
+          const tendered   = state.cashTendered || 0;
+          const change     = tendered - grandTotal;
+          return `
+          <div style="display:grid;gap:6px;margin-top:4px">
+            <label style="font-size:13px;font-weight:500;color:var(--muted)">Cash Received</label>
+            <input type="number" min="0" placeholder="Enter amount received"
+              value="${tendered || ""}"
+              data-cash-tendered
+              style="border:1px solid var(--border);border-radius:8px;padding:9px 12px;
+                     background:var(--surface);color:var(--text);font-size:16px;width:100%">
+            ${tendered > 0 ? `
+            <div style="display:flex;justify-content:space-between;padding:9px 12px;
+                        border-radius:8px;font-weight:600;font-size:15px;
+                        background:${change >= 0
+                          ? "color-mix(in srgb,#22c55e 12%,var(--surface))"
+                          : "color-mix(in srgb,#ef4444 12%,var(--surface))"}">
+              <span>${change >= 0 ? "Change Due" : "Short by"}</span>
+              <span style="color:${change >= 0 ? "#22c55e" : "#ef4444"}">
+                ${money(Math.abs(change), tenant.currency)}
+              </span>
+            </div>` : ""}
+          </div>`;
+        })() : ""}
+
         ${state.checkoutPayment === "Udhar (Credit)" ? `
-          <div style="display:grid;gap:8px">
+          <div style="display:grid;gap:8px;margin-top:4px">
             <input class="search" placeholder="Customer name *"
               data-udhar="name" value="${state.udharName || ""}">
             <input class="search" placeholder="Customer phone *"
@@ -1274,19 +1341,19 @@ function dashboard() {
   const udharBal = udhar.filter(u => u.status !== "Settled")
                         .reduce((s,u) => s + Number(u.balance_due||0), 0);
   const kpis = [
-    ["Today's Revenue",  todayRev,          ""],
-    ["Total Revenue",    total,             ""],
-    ["Total Sales",      sales.length,      ""],
-    ["Open Tickets",     pending,           ""],
-    ["Udhar Balance",    udharBal,          ""],
-    ["Employees",        (state.data.employees||[]).length, ""],
+    ["Today's Revenue",  todayRev,          "receipts"],
+    ["Total Revenue",    total,             "receipts"],
+    ["Total Sales",      sales.length,      "receipts"],
+    ["Open Tickets",     pending,           "repairs"],
+    ["Udhar Balance",    udharBal,          "udharList"],
+    ["Employees",        (state.data.employees||[]).length, "employees"],
   ];
   return `
     ${tit("Dashboard","Live overview of sales, tickets, and operations.",
       `<button class="primary-button" data-action="new-sale">Go to POS</button>`)}
     <div class="grid kpi-grid">
-      ${kpis.map(([l,v]) => `
-        <div class="card kpi">
+      ${kpis.map(([l,v,target]) => `
+        <div class="card kpi" style="cursor:pointer" data-kpi-target="${target}">
           <span class="label">${l}</span>
           <span class="value">${typeof v === "number" && l !== "Total Sales" && l !== "Open Tickets" && l !== "Employees"
             ? money(v, tenant.currency) : v}</span>
@@ -1389,7 +1456,7 @@ function technicianView() {
             <div style="font-size:12px;color:var(--muted)">
               Parts: ${t.components_noted.map(c => c.name).join(", ")}
             </div>` : ""}
-          <div style="display:flex;gap:8px;flex-wrap:wrap" onclick="event.stopPropagation()">
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
             ${["Pending","In Progress","Ready"].map(s =>
               s !== t.status ? `
               <button class="secondary-button" style="font-size:12px;padding:6px 12px"
@@ -1402,6 +1469,10 @@ function technicianView() {
               data-action="open-ticket-editor" data-ticket-id="${t.id}">
               Edit Components
             </button>` : ""}
+            <button class="secondary-button" style="font-size:12px;padding:6px 12px"
+              data-action="workshop-collect" data-ticket-id="${t.id}">
+              Collect → POS
+            </button>
           </div>
         </div>`).join("") : `
         <div class="card" style="text-align:center;padding:40px;color:var(--muted)">
@@ -1449,11 +1520,11 @@ function repairs() {
                   data-action="open-ticket-editor"
                   data-ticket-id="${r.id}"
                   style="font-size:12px"
-                  onclick="event.stopPropagation()">Edit</button>` : ""}
+                  >Edit</button>` : ""}
                 <button class="secondary-button"
                   data-action="add-ticket-to-cart"
                   style="font-size:12px"
-                  onclick="event.stopPropagation()">Collect</button>
+                  >Collect</button>
               </td>
             </tr>`).join("") :
             `<tr><td colspan="6" style="text-align:center;color:var(--muted)">
@@ -1570,7 +1641,7 @@ function employees() {
       ${emps.length ? `
         <div class="table-wrap"><table>
           <thead><tr>
-            <th>Name</th><th>Role</th><th>Status</th><th>PIN</th>
+            <th>Name</th><th>Role</th><th>Status</th><th>PIN</th><th></th>
           </tr></thead>
           <tbody>
             ${emps.map(e => `<tr>
@@ -1579,6 +1650,18 @@ function employees() {
               <td><span class="badge ${e.status==="Active"?"good":"bad"}">
                 ${e.status}</span></td>
               <td><span class="muted">••••</span></td>
+              <td style="display:flex;gap:6px">
+                <button class="secondary-button" style="font-size:12px"
+                  data-action="edit-employee"
+                  data-emp-id="${e.id}"
+                  data-emp-name="${e.name}"
+                  data-emp-role="${e.role}"
+                  data-emp-status="${e.status}">Edit</button>
+                <button class="secondary-button" style="font-size:12px;color:var(--danger)"
+                  data-action="remove-employee"
+                  data-emp-id="${e.id}"
+                  data-emp-name="${e.name}">Remove</button>
+              </td>
             </tr>`).join("")}
           </tbody>
         </table></div>` :
@@ -1610,11 +1693,15 @@ function receipts() {
                   INV-${s.id} · ${s.payment_method} · ${s.employee_name || ""}
                 </span>
               </div>
-              <div style="text-align:right;flex-shrink:0">
-                <div><strong>${money(s.total_bill, CFG.currency)}</strong></div>
-                <span class="muted" style="font-size:11px">
-                  ${new Date(s.created_at).toLocaleDateString()} ${new Date(s.created_at).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}
-                </span>
+              <div style="text-align:right;flex-shrink:0;display:flex;align-items:center;gap:10px">
+                <div>
+                  <div><strong>${money(s.total_bill, CFG.currency)}</strong></div>
+                  <span class="muted" style="font-size:11px">
+                    ${new Date(s.created_at).toLocaleDateString()} ${new Date(s.created_at).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}
+                  </span>
+                </div>
+                <button class="secondary-button" style="font-size:12px;white-space:nowrap"
+                  data-action="reprint-receipt" data-sale-id="${s.id}">Reprint</button>
               </div>
             </div>
             ${isOpen ? `
@@ -2414,6 +2501,8 @@ async function doCheckout() {
     payment_method: isUdhar ? "Udhar" : state.checkoutPayment,
     employee_id:    SESSION.employee?.id   || null,
     employee_name:  SESSION.employee?.name || "",
+    cash_tendered:  state.checkoutPayment === "Cash" ? (state.cashTendered || 0) : 0,
+    change_given:   state.checkoutPayment === "Cash" ? Math.max(0, (state.cashTendered || 0) - Math.max(0, total)) : 0,
   }).select().single();
 
   if (saleErr) { alert("Sale error: " + saleErr.message); return; }
@@ -2456,16 +2545,16 @@ async function doCheckout() {
   };
 
   // Reset cart state
-  state.cart           = [];
-  state.cartTicketId   = null;
-  state.cartLabour     = 0;
-  state.cartAdvance    = 0;
-  state.udharName      = "";
-  state.udharPhone     = "";
+  state.cart            = [];
+  state.cartTicketId    = null;
+  state.cartLabour      = 0;
+  state.cartAdvance     = 0;
+  state.cashTendered    = 0;
+  state.udharName       = "";
+  state.udharPhone      = "";
   state.checkoutPayment = "Cash";
-  state.modal          = { type: "receipt", sale };
-  pingUsage(); // silent — doesn't block or alert
-
+  state.modal           = { type: "receipt", sale };
+  await pingUsage("POS");
   await load();
 }
 
@@ -2483,9 +2572,21 @@ document.addEventListener("click", async event => {
     "[data-tc-add],[data-tc-remove],[data-tc-decline],[data-tc-confirm]," +
     "[data-settle-id],[data-action],[data-remove-quick],[data-quick-collect]," +
     "[data-inv-edit],[data-inv-delete],[data-remove-qitem],[data-add-qprice]," +
-    "[data-remove-qprice],[data-qitem-name],[data-pick-price],[data-view-ticket]"
+    "[data-remove-qprice],[data-qitem-name],[data-pick-price],[data-view-ticket]," +
+    "[data-kpi-target]"
   );
   if (!el) return;
+
+  // ── KPI tile drill-down ──────────────────────────────────────────
+  if (el.dataset.kpiTarget) {
+    const target = el.dataset.kpiTarget;
+    if (target === "udharList") { state.modal = { type: "udharList" }; render(); return; }
+    if (["dashboard","repairs","inventory","reports","receipts","employees","settings"].includes(target)) {
+      state.route = "admin"; state.adminModule = target; render(); return;
+    }
+    if (target === "pos") { state.route = "pos"; render(); return; }
+    return;
+  }
 
     // ── Quick collect from ticket list on POS ────────────────────────
   if (el.dataset.quickCollect) {
@@ -2520,6 +2621,18 @@ if (el.dataset.action === "save-quick-comps") {
   await load(); return;
 }
   // ── Navigation ──────────────────────────────────────────────────
+  // ── Workshop: Collect → POS (loads ticket checkout modal, switches to POS) ──
+  if (el.dataset.action === "workshop-collect") {
+    const ticketId = el.dataset.ticketId;
+    const found = state.data.tickets.find(t => String(t.id) === String(ticketId));
+    if (!found) return;
+    state.cartTicketId = found.id;
+    state.cartAdvance  = Number(found.advance_payment || 0);
+    state.modal        = { type: "ticketCheckout", id: String(found.id) };
+    state.route        = "pos";
+    render(); return;
+  }
+
   if (el.dataset.route) {
     state.route = el.dataset.route; state.filter = ""; render(); return;
   }
@@ -2558,7 +2671,17 @@ if (el.dataset.action === "save-quick-comps") {
     render(); return;
   }
 
-  if (el.dataset.action === "open-ticket-editor") {
+  if (el.dataset.action === "remove-employee") {
+    const name = el.dataset.empName || "this employee";
+    if (!confirm(`Remove ${name}? This cannot be undone.`)) return;
+    const empId = el.dataset.empId;
+    const { error } = await sb.from("employees").delete().eq("id", empId);
+    if (error) { alert("Error removing employee: " + error.message); return; }
+    await sb.from("active_sessions").delete().eq("employee_id", String(empId));
+    await load(); return;
+  }
+
+
     const ticketId = el.dataset.ticketId;
     const tk = state.data.tickets.find(t => String(t.id) === String(ticketId));
     if (!tk) return;
@@ -2719,7 +2842,41 @@ if (el.dataset.action === "save-quick-comps") {
     return;
   }
 
-  // ── New sale shortcut from dashboard ────────────────────────────
+  // ── Reprint from receipts archive ───────────────────────────────
+  if (el.dataset.action === "reprint-receipt") {
+    const saleId = Number(el.dataset.saleId);
+    const sale   = state.data.sales.find(s => s.id === saleId);
+    if (!sale) { alert("Sale not found."); return; }
+    let parts = [];
+    if (sale.ticket_id) {
+      const tk = state.data.tickets.find(t => t.id === sale.ticket_id);
+      if (tk) parts = (tk.components_noted || []).filter(c => c.name);
+    }
+    const reprSale = {
+      receiptNo: `INV-${sale.id}`,
+      date:      sale.created_at,
+      cashier:   sale.employee_name || "Counter",
+      customer:  sale.customer_name || "Walk-in",
+      items:     (sale.items_sold || []).map(i => ({
+        name:          i.name,
+        qty:           i.qty || 1,
+        soldPrice:     i.sold_price || i.soldPrice || 0,
+        originalPrice: i.original_price || i.originalPrice || 0,
+        discount:      i.discount || 0,
+        reason:        i.reason || "",
+      })),
+      parts,
+      labour:  sale.labour_cost || 0,
+      discount: sale.discount   || 0,
+      tax:      sale.tax        || 0,
+      total:    sale.total_bill || 0,
+      payment:  sale.payment_method || "—",
+    };
+    printThermal(buildReceiptSlip(reprSale, true));
+    return;
+  }
+
+
   if (el.dataset.action === "new-sale") {
     state.route = "pos"; render(); return;
   }
@@ -2968,13 +3125,18 @@ document.addEventListener("input", event => {
   if (event.target.dataset.filter) {
     state.filter = event.target.value; render();
   }
-// Ticket editor live total
+  // Ticket editor live total
   if (event.target.dataset.tePrice !== undefined || event.target.dataset.teLabour !== undefined) {
     const prices = [...document.querySelectorAll("[data-te-price]")]
       .reduce((s, inp) => s + (Number(inp.value) || 0), 0);
     const labour = Number(document.getElementById("te-labour")?.value || 0);
     const totalEl = document.getElementById("te-total");
     if (totalEl) totalEl.textContent = money(prices + labour, CFG.currency);
+  }
+  // Cash tendered live change calculation
+  if (event.target.dataset.cashTendered !== undefined) {
+    state.cashTendered = Number(event.target.value) || 0;
+    render();
   }
 });
 
@@ -2991,7 +3153,7 @@ document.addEventListener("change", async event => {
     state.adminModule = t.value; state.filter = ""; render(); return;
   }
   if (t.dataset.action === "payment") {
-    state.checkoutPayment = t.value; render(); return;
+    state.checkoutPayment = t.value; state.cashTendered = 0; render(); return;
   }
   if (t.dataset.udhar === "name")  { state.udharName  = t.value; return; }
   if (t.dataset.udhar === "phone") { state.udharPhone = t.value; return; }
@@ -3037,6 +3199,7 @@ document.addEventListener("submit", async event => {
     });
     if (!res.ok) { alert("Error saving ticket: " + res.error); return; }
     state.modal = null;
+    await pingUsage("REPAIR_TICKET");
     printThermal(buildTicketSlip(res.data));
     await load(); return;
   }
@@ -3160,6 +3323,7 @@ if (type === "inv-add") {
       min_qty:  Number(data.min_qty|| 0),
     });
     if (error) { alert("Error: " + error.message); return; }
+    await pingUsage("INVENTORY");
     state.modal = null;
     await load(); return;
   }
