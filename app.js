@@ -2681,7 +2681,7 @@ if (el.dataset.action === "save-quick-comps") {
     await load(); return;
   }
 
-
+/*
     const ticketId = el.dataset.ticketId;
     const tk = state.data.tickets.find(t => String(t.id) === String(ticketId));
     if (!tk) return;
@@ -2690,6 +2690,7 @@ if (el.dataset.action === "save-quick-comps") {
     state.modal = { type: "ticket-editor", id: ticketId };
     render(); return;
   }
+  */
   // ── Ticket Editor: add component ─────────────────────────────────
   if (el.dataset.action === "te-add-comp") {
     const name = document.getElementById("te-new-comp")?.value?.trim();
