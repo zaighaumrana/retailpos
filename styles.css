@@ -453,6 +453,7 @@ th { color: var(--muted); font-size: 12px; font-weight: 700; text-transform: upp
   .platform-sidebar { position: fixed; z-index: 8; width: min(86vw, 280px); transform: translateX(-105%); transition: transform 180ms ease; }
   .platform-sidebar.open { transform: translateX(0); }
 }
+
 @media (max-width: 820px) {
   .app-shell { grid-template-columns: 1fr; }
   .sidebar {
@@ -474,6 +475,7 @@ th { color: var(--muted); font-size: 12px; font-weight: 700; text-transform: upp
   .product-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .tenant-grid { grid-template-columns: 1fr; }
 }
+
 @media (max-width: 460px) {
   .product-grid { grid-template-columns: 1fr; }
   .toolbar-left, .toolbar-right, .toolbar, .page-title { width: 100%; }
@@ -487,3 +489,293 @@ th { color: var(--muted); font-size: 12px; font-weight: 700; text-transform: upp
   #print-zone * { display: revert !important; }
 }
 #print-zone { display: none; }
+
+/* ════════════════════════════════════════════════════════
+   MOBILE RESPONSIVE — RetailOS POS
+   Targets phones (≤768px) and tablets (≤1024px)
+   No pinch-zoom needed — everything stacks and scales
+════════════════════════════════════════════════════════ */
+
+/* ── Topbar: wrap gracefully on small screens ── */
+@media (max-width: 768px) {
+  .topbar {
+    flex-wrap: wrap;
+    padding: 10px 12px;
+    gap: 8px;
+  }
+  .top-brand {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+  .top-brand strong { font-size: 14px; }
+  .top-actions {
+    width: 100%;
+    justify-content: flex-start;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  /* Hide employee chip on very small screens to save space */
+  .top-actions .chip:not(:last-of-type) { display: none; }
+
+  /* Navigation buttons in topbar — finger friendly */
+  .top-actions button,
+  .top-actions .icon-button {
+    min-height: 40px;
+    padding: 8px 12px;
+    font-size: 13px;
+  }
+
+  /* Module select dropdown — full width */
+  .top-actions select.compact-select,
+  .top-actions select.tenant-switcher {
+    width: auto;
+    max-width: 160px;
+    font-size: 13px;
+  }
+
+  /* Content padding tighter on mobile */
+  .content {
+    padding: 12px;
+    gap: 12px;
+  }
+
+  /* Page titles stack */
+  .page-title {
+    flex-direction: column;
+    gap: 10px;
+  }
+  .page-title > div:last-child {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .page-title button {
+    flex: 1 1 auto;
+    min-height: 42px;
+  }
+
+  h1 { font-size: 20px; }
+  h2 { font-size: 16px; }
+}
+
+/* ── POS Layout: single column on mobile ── */
+@media (max-width: 768px) {
+  .pos-layout {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  /* Cart goes below quick items — sticky disabled */
+  .cart {
+    position: static;
+    order: 2;
+  }
+
+  /* Quick items section comes first */
+  .pos-layout > div:first-child {
+    order: 1;
+  }
+
+  /* Quick item buttons — larger tap targets */
+  .pos-layout button[data-qitem-name] {
+    min-height: 48px;
+    font-size: 14px;
+    padding: 10px 14px;
+  }
+
+  /* Cart lines readable on mobile */
+  .cart-line {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+  .cart-line > div:first-child { font-size: 14px; }
+  .qty-controls { justify-content: flex-start; }
+  .qty-controls button {
+    width: 38px;
+    height: 38px;
+    font-size: 18px;
+  }
+
+  /* Total row larger text */
+  .total-row.grand { font-size: 22px; }
+
+  /* Checkout button full width, finger friendly */
+  .cart > button[data-action="checkout"] {
+    min-height: 52px;
+    font-size: 16px;
+    width: 100%;
+  }
+
+  /* Cash tendered input larger */
+  input[data-cash-tendered] {
+    font-size: 18px !important;
+    min-height: 48px !important;
+  }
+}
+
+/* ── KPI Grid: 2 columns on tablet, 1 on phone ── */
+@media (max-width: 768px) {
+  .kpi-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .kpi { min-height: 90px; padding: 12px; }
+  .kpi .value { font-size: 20px; }
+  .kpi .label { font-size: 12px; }
+}
+@media (max-width: 400px) {
+  .kpi-grid { grid-template-columns: 1fr; }
+}
+
+/* ── Tables: horizontal scroll on mobile ── */
+@media (max-width: 768px) {
+  .table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    border-radius: 8px;
+  }
+  table { min-width: 560px; }
+  th, td { padding: 10px 8px; font-size: 13px; }
+
+  /* Action buttons in table cells */
+  td button {
+    min-height: 36px;
+    font-size: 12px;
+    padding: 6px 10px;
+  }
+}
+
+/* ── Modals: full screen on mobile ── */
+@media (max-width: 768px) {
+  .modal-backdrop {
+    padding: 0;
+    align-items: flex-end;
+  }
+  .modal {
+    width: 100%;
+    max-width: 100%;
+    max-height: 92vh;
+    border-radius: 16px 16px 0 0;
+    padding: 20px 16px;
+  }
+  .modal h2 { font-size: 18px; }
+  .modal-actions {
+    justify-content: stretch;
+    gap: 8px;
+  }
+  .modal-actions button {
+    flex: 1;
+    min-height: 46px;
+    font-size: 15px;
+  }
+
+  /* Form grid single column in modals */
+  .modal .form-grid { grid-template-columns: 1fr; }
+}
+
+/* ── Repair ticket queue on POS: larger tap rows ── */
+@media (max-width: 768px) {
+  .list-row {
+    padding: 12px;
+    gap: 10px;
+  }
+  .list-row button {
+    min-height: 40px;
+    min-width: 72px;
+    font-size: 13px;
+  }
+}
+
+/* ── Technician bench: stack ticket cards ── */
+@media (max-width: 768px) {
+  /* Status buttons wrap and are finger-sized */
+  div[style*="display:flex;gap:8px;flex-wrap:wrap"] > button {
+    min-height: 42px;
+    font-size: 13px;
+    flex: 1 1 auto;
+  }
+}
+
+/* ── Settings tabs: scroll horizontally ── */
+@media (max-width: 768px) {
+  .settings-tabs {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    gap: 0;
+    padding-bottom: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .settings-tab {
+    white-space: nowrap;
+    font-size: 13px;
+    padding: 8px 12px;
+    flex-shrink: 0;
+  }
+}
+
+/* ── Buttons: always finger-friendly minimum ── */
+@media (max-width: 768px) {
+  .primary-button,
+  .secondary-button,
+  .danger-button {
+    min-height: 42px;
+  }
+  input, select, textarea {
+    font-size: 16px !important; /* prevents iOS zoom on focus */
+    min-height: 44px;
+  }
+  .search { min-height: 44px; }
+}
+
+/* ── Two column grids: single on mobile ── */
+@media (max-width: 768px) {
+  .two-col { grid-template-columns: 1fr; }
+  .form-grid { grid-template-columns: 1fr; }
+  .three-col { grid-template-columns: 1fr; }
+}
+
+/* ── Admin back office header ── */
+@media (max-width: 768px) {
+  .admin-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px;
+  }
+}
+
+/* ── Reports page KPIs ── */
+@media (max-width: 768px) {
+  .reports .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* ── Badge: readable on mobile ── */
+@media (max-width: 768px) {
+  .badge { font-size: 11px; padding: 3px 7px; }
+}
+
+/* ── Toolbar: stack on mobile ── */
+@media (max-width: 768px) {
+  .toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .toolbar-left, .toolbar-right {
+    width: 100%;
+    justify-content: stretch;
+  }
+  .toolbar input, .toolbar select, .toolbar button {
+    flex: 1 1 auto;
+    width: 100%;
+  }
+  .search { min-width: 0; width: 100%; }
+}
+
+/* ── iOS safe area support (notch/home bar) ── */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  .cart > button[data-action="checkout"],
+  .modal-actions {
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+  .topbar {
+    padding-top: max(14px, env(safe-area-inset-top));
+  }
+}
