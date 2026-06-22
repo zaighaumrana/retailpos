@@ -422,8 +422,8 @@ async function submitPin() {
   const btn     = document.getElementById("login-btn");
   const entered = input?.value?.trim() || "";
 
-  if (entered.length < 6) {
-    if (errEl) { errEl.textContent = "Password must be at least 6 characters."; errEl.classList.remove("hidden"); }
+  if (!entered) {
+    if (errEl) { errEl.textContent = "Please enter your password."; errEl.classList.remove("hidden"); }
     return;
   }
 
@@ -804,7 +804,7 @@ function render() {
             <div class="logo">${tenant.logo?`<img alt="" src="${tenant.logo}">`:`${tenant.name.slice(0,2).toUpperCase()}`}</div>
             <div>
               <strong>${tenant.name}</strong>
-              <span class="muted" style="font-size:12px">${state.role} · ${state.route==="pos"?"POS Counter":"Back Office"}</span>
+              <span class="muted" style="font-size:12px">${state.role} · ${state.route==="pos"?"POS Counter":state.route==="workshop"?"Workshop":"Back Office"}</span>
             </div>
           </div>
           <div class="top-actions">
@@ -2681,7 +2681,8 @@ if (el.dataset.action === "save-quick-comps") {
     await load(); return;
   }
 
-/*
+
+  if (el.dataset.action === "open-ticket-editor") {
     const ticketId = el.dataset.ticketId;
     const tk = state.data.tickets.find(t => String(t.id) === String(ticketId));
     if (!tk) return;
@@ -2690,7 +2691,6 @@ if (el.dataset.action === "save-quick-comps") {
     state.modal = { type: "ticket-editor", id: ticketId };
     render(); return;
   }
-  */
   // ── Ticket Editor: add component ─────────────────────────────────
   if (el.dataset.action === "te-add-comp") {
     const name = document.getElementById("te-new-comp")?.value?.trim();
