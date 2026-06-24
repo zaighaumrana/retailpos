@@ -646,7 +646,9 @@ th { color: var(--muted); font-size: 12px; font-weight: 700; text-transform: upp
 @media (max-width: 768px) {
   .modal-backdrop {
     padding: 0;
+    display: flex;
     align-items: flex-end;
+    justify-content: center;
   }
   .modal {
     width: 100%;
@@ -654,6 +656,7 @@ th { color: var(--muted); font-size: 12px; font-weight: 700; text-transform: upp
     max-height: 92vh;
     border-radius: 16px 16px 0 0;
     padding: 20px 16px;
+    overflow-y: auto;
   }
   .modal h2 { font-size: 18px; }
   .modal-actions {
