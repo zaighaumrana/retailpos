@@ -2731,7 +2731,7 @@ if (el.dataset.action === "save-quick-comps") {
 
   // ── Login screen PIN pad ─────────────────────────────────────────
   if (el.dataset.action === "login-submit") {
-    submitlogin(); return;
+    submitLogin(); return;
   }
   if (el.dataset.action === "skip-login") {
     return; // disabled — login is now mandatory
