@@ -650,9 +650,12 @@ function buildTicketSlip(ticket) {
     <div class="c sm">Thank you for your trust.</div>`;
 }
 
-function buildReceiptSlip(sale) {
+function buildReceiptSlip(sale, isReprint = false) {
   const items = sale.items || [];
   return `
+    ${isReprint ? `<div style="text-align:center;font-size:16px;font-weight:900;
+      border:3px solid #000;padding:4px 8px;margin-bottom:6px;letter-spacing:2px">
+      ★ DUPLICATE / REPRINT ★</div>` : ""}
     ${CFG.shop_logo
   ? `<div class="c" style="margin-bottom:4px">
        <img src="${CFG.shop_logo}"
@@ -702,6 +705,9 @@ function buildReceiptSlip(sale) {
       <span>${money(sale.total, CFG.currency)}</span>
     </div>
     <div class="row"><span>Payment</span><span>${sale.payment}</span></div>
+    ${sale.payment === "Cash" && sale.cashTendered > 0 ? `
+    <div class="row"><span>Cash Received</span><span>${money(sale.cashTendered, CFG.currency)}</span></div>
+    <div class="row"><span>Change Given</span><span>${money(sale.changeGiven || 0, CFG.currency)}</span></div>` : ""}
     <div class="ln"></div>
     <div class="c sm">${CFG.terms_text || "Thank you for your business."}</div>`;
 }
@@ -2276,7 +2282,7 @@ document.addEventListener("input", e => {
             <label class="field"><span>Name</span>
               <input name="name" value="${e.name}" required></label>
             <label class="field"><span>New PIN (leave blank to keep)</span>
-              <input name="pin_code" type="password" autocomplete="off" maxlength="6" placeholder="••••"></label>
+              <input name="pin_code" type="password" autocomplete="off" placeholder="Leave blank to keep"></label>
             <label class="field"><span>Role</span>
               <select name="role">
                 ${["Business Owner","Manager","Cashier","Technician"].map(r =>
@@ -2300,12 +2306,12 @@ document.addEventListener("input", e => {
           <p class="muted" style="font-size:13px">Admin PIN will be required to save.</p>
           <div class="form-grid">
             ${fld("Full Name","name")}
-            ${fld("4-digit PIN","pin_code","","number")}
+            ${fld("PIN / Password","pin_code","","password")}
             <label class="field"><span>Role</span>
               <select name="role">
                 <option>Cashier</option>
                 <option>Technician</option>
-                <option>Admin</option>
+                <option>Manager</option>
               </select>
             </label>
           </div>
@@ -2531,17 +2537,19 @@ async function doCheckout() {
 
   // Build receipt object for the modal (uses same shape as before)
   const sale = {
-    receiptNo:    `INV-${saleData.id}`,
-    date:         saleData.created_at,
-    cashier:      SESSION.employee?.name || "Counter",
-    customer:     state.udharName || "Walk-in",
-    items:        state.cart.map(i => ({...i})),
+    receiptNo:     `INV-${saleData.id}`,
+    date:          saleData.created_at,
+    cashier:       SESSION.employee?.name || "Counter",
+    customer:      state.udharName || "Walk-in",
+    items:         state.cart.map(i => ({...i})),
     subtotal,
     labour,
     tax,
     discount,
-    total:        Math.max(0, total),
-    payment:      isUdhar ? "Udhar" : state.checkoutPayment,
+    total:         Math.max(0, total),
+    payment:       isUdhar ? "Udhar" : state.checkoutPayment,
+    cashTendered:  state.checkoutPayment === "Cash" ? (state.cashTendered || 0) : 0,
+    changeGiven:   state.checkoutPayment === "Cash" ? Math.max(0, (state.cashTendered || 0) - Math.max(0, total)) : 0,
   };
 
   // Reset cart state
@@ -2672,13 +2680,26 @@ if (el.dataset.action === "save-quick-comps") {
   }
 
   if (el.dataset.action === "remove-employee") {
-    const name = el.dataset.empName || "this employee";
-    if (!confirm(`Remove ${name}? This cannot be undone.`)) return;
+    const name  = el.dataset.empName || "this employee";
     const empId = el.dataset.empId;
-    const { error } = await sb.from("employees").delete().eq("id", empId);
-    if (error) { alert("Error removing employee: " + error.message); return; }
-    await sb.from("active_sessions").delete().eq("employee_id", String(empId));
-    await load(); return;
+    openPinPrompt("admin", async () => {
+      // Try to delete — if FK constraint blocks it, deactivate instead
+      const { error } = await sb.from("employees").delete().eq("id", empId);
+      if (error) {
+        if (error.message.includes("foreign key") || error.message.includes("violates")) {
+          // Employee has linked records — deactivate instead of delete
+          const { error: deactErr } = await sb.from("employees")
+            .update({ status: "Inactive" }).eq("id", empId);
+          if (deactErr) { alert("Error: " + deactErr.message); return; }
+          alert(`${name} has transaction history and cannot be fully deleted.\nThey have been set to Inactive instead — they can no longer log in.`);
+        } else {
+          alert("Error removing employee: " + error.message); return;
+        }
+      }
+      await sb.from("active_sessions").delete().eq("employee_id", String(empId));
+      await load();
+    });
+    return;
   }
 
 
@@ -3134,10 +3155,29 @@ document.addEventListener("input", event => {
     const totalEl = document.getElementById("te-total");
     if (totalEl) totalEl.textContent = money(prices + labour, CFG.currency);
   }
-  // Cash tendered live change calculation
+  // Cash tendered — update state and only re-render the change display
   if (event.target.dataset.cashTendered !== undefined) {
     state.cashTendered = Number(event.target.value) || 0;
-    render();
+    // Update change display inline without full re-render to avoid focus loss
+    const subtotal   = state.cart.reduce((s, i) => s + i.soldPrice * i.qty, 0);
+    const tax        = subtotal * (Number(CFG.tax_rate || 0) / 100);
+    const grandTotal = subtotal + tax;
+    const change     = state.cashTendered - grandTotal;
+    // Remove old change display if exists
+    const existing = document.getElementById("change-display");
+    if (existing) existing.remove();
+    // Insert new change display after the input
+    if (state.cashTendered > 0) {
+      const inp = event.target;
+      const div = document.createElement("div");
+      div.id = "change-display";
+      div.style.cssText = `display:flex;justify-content:space-between;padding:9px 12px;
+        border-radius:8px;font-weight:600;font-size:15px;margin-top:4px;
+        background:${change >= 0 ? "color-mix(in srgb,#22c55e 12%,var(--surface))" : "color-mix(in srgb,#ef4444 12%,var(--surface))"}`;
+      div.innerHTML = `<span>${change >= 0 ? "Change Due" : "Short by"}</span>
+        <span style="color:${change >= 0 ? "#22c55e" : "#ef4444"}">${money(Math.abs(change), CFG.currency)}</span>`;
+      inp.parentNode.insertBefore(div, inp.nextSibling);
+    }
   }
 });
 
