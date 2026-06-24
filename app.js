@@ -259,16 +259,24 @@ const ADMIN_MODULES = [
 ═══════════════════════════════════════════════════════════════════ */
 
 // ── PIN verification (never loads pin_code on GET, only verifies) ──
-async function verifyPin(pin) {
-  // We do a direct match query — pin_code never comes to the client
+async function verifyLogin(email, password) {
   const { data, error } = await sb
     .from("employees")
-    .select("id, name, role, status")
-    .eq("pin_code", String(pin))
+    .select("id, name, role, status, email")
+    .eq("email", email.toLowerCase().trim())
+    .eq("password", password)
     .eq("status", "Active")
     .single();
   if (error || !data) return { ok: false };
-  return { ok: true, employee: { id: data.id, name: data.name, role: data.role } };
+  return { ok: true, employee: { id: data.id, name: data.name, role: data.role, email: data.email } };
+}
+
+function validatePassword(p) {
+  if (p.length < 8) return "At least 8 characters required.";
+  if (!/[A-Za-z]/.test(p)) return "Must contain at least one letter.";
+  if (!/[0-9]/.test(p)) return "Must contain at least one number.";
+  if (!/[^A-Za-z0-9]/.test(p)) return "Must contain at least one special character.";
+  return null;
 }
 
 async function verifyAdmin(pin) {
@@ -357,27 +365,38 @@ function loginScreen() {
           <span class="muted" style="font-size:13px">Enter password to identify</span>
         </div>`}
 
-        <div style="display:grid;gap:10px">
-          <label class="field">
-            <span>Password</span>
-            <input id="login-password" type="password"
-              autocomplete="current-password"
-              placeholder="Enter your password"
-              minlength="6"
-              style="font-size:15px;letter-spacing:2px"
-              autofocus>
-          </label>
-          <div id="login-error" class="hidden"
-            style="color:var(--danger);font-size:13px;text-align:center;padding:4px 0">
-            Incorrect password. Please try again.
-          </div>
-          <div id="cf-turnstile-wrap" style="display:flex;justify-content:center;margin:4px 0"></div>
-          <button id="login-btn" class="primary-button"
-            style="width:100%;font-size:15px;padding:12px;margin-top:2px"
-            data-action="login-submit">
-            Login
-          </button>
-        </div>
+       <div style="display:grid;gap:10px">
+  <label class="field">
+    <span>Email</span>
+    <input id="login-email" type="email"
+      autocomplete="email"
+      placeholder="your@email.com"
+      style="font-size:15px"
+      autofocus>
+  </label>
+  <label class="field">
+    <span>Password</span>
+    <input id="login-password" type="password"
+      autocomplete="current-password"
+      placeholder="Your password"
+      style="font-size:15px">
+  </label>
+  <div id="login-error" class="hidden"
+    style="color:var(--danger);font-size:13px;text-align:center;padding:4px 0">
+    Incorrect email or password.
+  </div>
+  <button type="button" data-action="forgot-password"
+    style="font-size:12px;color:var(--primary);background:none;border:none;
+           cursor:pointer;text-align:right;padding:0">
+    Forgot password?
+  </button>
+  <div id="cf-turnstile-wrap" style="display:flex;justify-content:center;margin:4px 0"></div>
+  <button id="login-btn" class="primary-button"
+    style="width:100%;font-size:15px;padding:12px;margin-top:2px"
+    data-action="login-submit">
+    Login
+  </button>
+</div>
 
         <p class="muted" style="text-align:center;font-size:12px;margin:0">
           ${CFG.shop_address||""}
@@ -416,55 +435,47 @@ function onPasswordInput(val) {
   }
 }
 
-async function submitPin() {
-  const input   = document.getElementById("login-password");
+async function submitLogin() {
+  const emailEl = document.getElementById("login-email");
+  const passEl  = document.getElementById("login-password");
   const errEl   = document.getElementById("login-error");
   const btn     = document.getElementById("login-btn");
-  const entered = input?.value?.trim() || "";
+  const email   = emailEl?.value?.trim() || "";
+  const pass    = passEl?.value?.trim()  || "";
 
-  if (!entered) {
-    if (errEl) { errEl.textContent = "Please enter your password."; errEl.classList.remove("hidden"); }
+  if (!email || !pass) {
+    if (errEl) { errEl.textContent = "Please enter your email and password."; errEl.classList.remove("hidden"); }
     return;
   }
 
   if (btn) { btn.disabled = true; btn.textContent = "Logging in…"; }
   if (errEl) errEl.classList.add("hidden");
 
-  // 1. Check admin password
-  if (String(entered) === String(CFG.admin_password)) {
-    SESSION = { employee: { name: "Admin", role: "Business Owner" }, isAdmin: true, loginSkipped: false };
-    state.role    = "Business Owner";
-    state.route   = "admin";
+  // 1. Check owner login against shop_config
+  if (email.toLowerCase() === (CFG.owner_email || "").toLowerCase() && pass === CFG.owner_password) {
+    SESSION = { employee: { name: "Admin", role: "Business Owner", email }, isAdmin: true, loginSkipped: false };
+    state.role        = "Business Owner";
+    state.route       = "admin";
     state.adminModule = "dashboard";
-    loginScreen._preview = null;
-    _saveSession();
-    render();
-    return;
+    _saveSession(); render(); return;
   }
 
   // 2. Check employee
-  const res = await verifyPin(entered);
+  const res = await verifyLogin(email, pass);
   if (res.ok) {
     SESSION = { employee: res.employee, isAdmin: false, loginSkipped: false };
     const role = res.employee.role;
     state.role = role;
-    if (role === "Cashier") {
-      state.route = "pos";
-    } else if (role === "Technician") {
-      state.route = "workshop";
-    } else if (role === "Business Owner" || role === "Manager") {
-      state.route       = "admin";
-      state.adminModule = "dashboard";
+    if (role === "Cashier")                              state.route = "pos";
+    else if (role === "Technician")                      state.route = "workshop";
+    else if (role === "Business Owner" || role === "Manager") {
+      state.route = "admin"; state.adminModule = "dashboard";
     }
-    loginScreen._preview = null;
-    _saveSession();
-    render();
+    _saveSession(); render();
   } else {
     if (btn) { btn.disabled = false; btn.textContent = "Login"; }
-    if (errEl) { errEl.textContent = "Incorrect password. Please try again."; errEl.classList.remove("hidden"); }
-    const inp = document.getElementById("login-password");
-    if (inp) { inp.value = ""; inp.focus(); }
-    loginScreen._preview = null;
+    if (errEl) { errEl.textContent = "Incorrect email or password."; errEl.classList.remove("hidden"); }
+    if (passEl) { passEl.value = ""; passEl.focus(); }
   }
 }
 // ── PIN prompt modal (discount / checkout / admin / settle / return) ──
@@ -1152,6 +1163,35 @@ function pos() {
                 data-action="add-custom-item">+ Add</button>
             </div>
           </div>`}  
+      ${CFG.inventory_module_enabled ? (() => {
+        const invItems = (state.data.inventory || []).filter(i => Number(i.qty || 0) > 0);
+        if (!invItems.length) return "";
+        const invFilter = state.invSearch || "";
+        const filtered  = invFilter
+          ? invItems.filter(i => i.name.toLowerCase().includes(invFilter.toLowerCase())
+              || (i.category||"").toLowerCase().includes(invFilter.toLowerCase()))
+          : invItems;
+        return `
+          <div class="card">
+            <h2 style="margin-bottom:10px">Stock Items</h2>
+            <input placeholder="Search stock…" value="${invFilter}"
+              data-inv-search
+              style="width:100%;margin-bottom:10px;border:1px solid var(--border);
+                     border-radius:8px;padding:8px 12px;background:var(--surface);
+                     color:var(--text);font-size:14px">
+            <div style="display:flex;flex-wrap:wrap;gap:8px">
+              ${filtered.slice(0, 24).map(i => `
+                <button class="secondary-button"
+                  style="font-size:13px;padding:8px 14px;border-radius:8px;text-align:left"
+                  data-inv-pos-add="${i.id}"
+                  data-inv-pos-name="${i.name}"
+                  data-inv-pos-price="${i.price}">
+                  <div style="font-weight:600">${i.name}</div>
+                  <div style="font-size:11px;color:var(--muted)">${money(i.price, CFG.currency)} · ${i.qty} left</div>
+                </button>`).join("")}
+            </div>
+          </div>`;
+      })() : ""}
       ${tenant.repairModuleEnabled ? `
           <div class="card">
             <h2 style="margin-bottom:12px">Open Repair Tickets</h2>
@@ -2021,7 +2061,7 @@ function modal() {
             document.addEventListener("keydown", e => {
   // ── Login screen — Enter submits ──────────────────────────────
   const onLoginScreen = !SESSION.employee && !SESSION.loginSkipped;
-  if (onLoginScreen && e.key === "Enter") { e.preventDefault(); submitPin(); return; }
+  if (onLoginScreen && e.key === "Enter") { e.preventDefault(); submitLogin(); return; }
 
   // ── PIN prompt modal — capture keyboard ──────────────────────
   const pinPromptOpen = !!document.getElementById("pp-display");
@@ -2306,6 +2346,8 @@ document.addEventListener("input", e => {
           <p class="muted" style="font-size:13px">Admin PIN will be required to save.</p>
           <div class="form-grid">
             ${fld("Full Name","name")}
+            ${fld("Email","email","","email")}
+            ${fld("Password","password","","password")}
             ${fld("PIN / Password","pin_code","","password")}
             <label class="field"><span>Role</span>
               <select name="role">
@@ -2428,6 +2470,9 @@ function receiptPreview(sale) {
       ${sale.tax > 0 ? `Tax: ${money(sale.tax, t.currency)}<br>` : ""}
       <strong>Total: ${money(sale.total, t.currency)}</strong><br>
       Payment: ${sale.payment || "—"}
+      ${sale.payment === "Cash" && sale.cashTendered > 0 ? `<br>
+      Cash Received: <strong>${money(sale.cashTendered, t.currency)}</strong><br>
+      Change Given: <strong>${money(sale.changeGiven || 0, t.currency)}</strong>` : ""}
       <hr>
       <center>${t.receiptFooter || ""}</center>
     </div>`;
@@ -2581,10 +2626,33 @@ document.addEventListener("click", async event => {
     "[data-settle-id],[data-action],[data-remove-quick],[data-quick-collect]," +
     "[data-inv-edit],[data-inv-delete],[data-remove-qitem],[data-add-qprice]," +
     "[data-remove-qprice],[data-qitem-name],[data-pick-price],[data-view-ticket]," +
-    "[data-kpi-target]"
+    "[data-kpi-target],[data-inv-pos-add]"
   );
   if (!el) return;
-
+  
+  if (el.dataset.action === "forgot-password") {
+    const email = document.getElementById("login-email")?.value?.trim();
+    if (!email) {
+      alert("Enter your email address first, then click Forgot Password.");
+      document.getElementById("login-email")?.focus();
+      return;
+    }
+    // Check if employee exists with this email
+    const { data } = await sb.from("employees")
+      .select("id, name, email, status")
+      .eq("email", email.toLowerCase())
+      .maybeSingle();
+    // Also check owner
+    const isOwner = email.toLowerCase() === (CFG.owner_email || "").toLowerCase();
+    if (!data && !isOwner) {
+      alert("No account found with that email address.\nContact your administrator.");
+      return;
+    }
+    // Send password reset via Supabase Auth — or show manual reset message
+    alert(`Password reset requested for ${email}.\n\nContact your RetailOS administrator to reset your password.\nYour account is confirmed active.`);
+    // Future: integrate Supabase Auth magic link here
+    return;
+  }
   // ── KPI tile drill-down ──────────────────────────────────────────
   if (el.dataset.kpiTarget) {
     const target = el.dataset.kpiTarget;
@@ -2663,7 +2731,7 @@ if (el.dataset.action === "save-quick-comps") {
 
   // ── Login screen PIN pad ─────────────────────────────────────────
   if (el.dataset.action === "login-submit") {
-    submitPin(); return;
+    submitlogin(); return;
   }
   if (el.dataset.action === "skip-login") {
     return; // disabled — login is now mandatory
@@ -3053,6 +3121,26 @@ if (el.dataset.action === "save-quick-comps") {
     state.modal = { type: "returnFlow" }; render(); return;
   }
 
+  if (el.dataset.invPosAdd) {
+    const id    = Number(el.dataset.invPosAdd);
+    const name  = el.dataset.invPosName;
+    const price = Number(el.dataset.invPosPrice);
+    const key   = `inv-${id}`;
+    const ex    = state.cart.find(i => i.productId === key);
+    if (ex) { ex.qty += 1; }
+    else state.cart.push({
+      productId:     key,
+      name,
+      qty:           1,
+      originalPrice: price,
+      soldPrice:     price,
+      discount:      0,
+      reason:        "",
+      isInventory:   true,
+      inventoryId:   id,
+    });
+    render(); return;
+  }
   // ── Quick items ──────────────────────────────────────────────────
   if (el.dataset.qitemName) {
     const prices = JSON.parse(el.dataset.qitemPrices || "[]");
@@ -3146,6 +3234,10 @@ if (el.dataset.action === "save-quick-comps") {
 document.addEventListener("input", event => {
   if (event.target.dataset.filter) {
     state.filter = event.target.value; render();
+  }
+  if (event.target.dataset.invSearch !== undefined) {
+    state.invSearch = event.target.value;
+    render();
   }
   // Ticket editor live total
   if (event.target.dataset.tePrice !== undefined || event.target.dataset.teLabour !== undefined) {
@@ -3303,12 +3395,15 @@ document.addEventListener("submit", async event => {
 
   if (type === "employee") {
     openPinPrompt("admin", async () => {
-      const { error } = await sb.from("employees").insert({
-        name:     data.name,
-        pin_code: String(data.pin_code),
-        role:     data.role || "Cashier",
-        status:   "Active",
-      });
+      const pwErr = validatePassword(data.password || "");
+if (pwErr) { alert(pwErr); return; }
+const { error } = await sb.from("employees").insert({
+  name:     data.name,
+  email:    (data.email || "").toLowerCase().trim(),
+  password: data.password,
+  role:     data.role || "Cashier",
+  status:   "Active",
+});
       if (error) { alert("Error saving employee: " + error.message); return; }
       state.modal = null;
       await load();
